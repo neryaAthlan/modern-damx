@@ -51,6 +51,10 @@ cd modern-damx
 sudo ./install.sh
 ```
 
+Every `v*` tag is built by GitHub Actions on Debian 13; the release page
+carries the three binaries, a checksum file and a self-contained tarball (source
+and binaries) for offline installs.
+
 The installer has modes:
 
 ```bash
