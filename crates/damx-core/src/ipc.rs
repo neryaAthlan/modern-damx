@@ -2,6 +2,7 @@
 //! talk to the privileged `damxd` daemon.
 
 use crate::driver::Status;
+use crate::policy::ProfilePolicy;
 use crate::preset::BootPreset;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -25,6 +26,11 @@ pub enum Request {
     Ping,
     Status,
     BootGet,
+    PolicyGet,
+    PolicySet {
+        limit_on_battery: bool,
+        battery_profile: String,
+    },
     SetProfile {
         value: String,
     },
@@ -59,6 +65,8 @@ pub struct Response {
     pub status: Option<Status>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<BootPreset>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<ProfilePolicy>,
 }
 
 impl Response {
@@ -81,6 +89,14 @@ impl Response {
         Self {
             ok: true,
             preset: Some(preset),
+            ..Default::default()
+        }
+    }
+
+    pub fn with_policy(policy: ProfilePolicy) -> Self {
+        Self {
+            ok: true,
+            policy: Some(policy),
             ..Default::default()
         }
     }

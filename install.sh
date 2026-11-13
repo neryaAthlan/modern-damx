@@ -145,7 +145,9 @@ fi
 
 systemctl daemon-reload
 info "Starting damxd"
-systemctl enable --now damxd.service
+systemctl enable damxd.service
+# restart, not just start: an already running daemon must pick up the new binary
+systemctl restart damxd.service
 
 TARGET_USER="${SUDO_USER:-${USER:-}}"
 if [ -n "${TARGET_USER}" ] && [ "${TARGET_USER}" != "root" ]; then

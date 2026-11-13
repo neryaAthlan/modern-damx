@@ -1,5 +1,6 @@
 //! User-level configuration and cache locations.
 
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -13,12 +14,43 @@ pub const DEFAULT_GUI_REPO: &str = "neryaAthlan/modern-damx";
 pub struct AppConfig {
     #[serde(default)]
     pub updates: UpdatesConfig,
+    #[serde(default)]
+    pub ui: UiConfig,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             updates: UpdatesConfig::default(),
+            ui: UiConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UiConfig {
+    #[serde(default)]
+    pub temperature_unit: TemperatureUnit,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TemperatureUnit {
+    #[default]
+    Celsius,
+    Fahrenheit,
+}
+
+impl TemperatureUnit {
+    pub fn format(self, celsius: Option<f32>) -> String {
+        match celsius {
+            Some(value) => match self {
+                TemperatureUnit::Celsius => format!("{value:.1} °C"),
+                TemperatureUnit::Fahrenheit => {
+                    format!("{:.1} °F", value * 9.0 / 5.0 + 32.0)
+                }
+            },
+            None => "—".to_string(),
         }
     }
 }
@@ -87,6 +119,16 @@ pub fn load() -> AppConfig {
         .unwrap_or_default()
 }
 
+/// Saves the user configuration, used by the temperature-unit preference.
+pub fn save(config: &AppConfig) -> Result<()> {
+    let path = config_path();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let text = toml::to_string_pretty(config).context("serialising the configuration")?;
+    fs::write(&path, text).with_context(|| format!("writing {}", path.display()))
+}
+
 /// Writes the default configuration file if none exists yet, so users have
 /// something to edit.
 pub fn ensure_config_file() -> Option<PathBuf> {
@@ -103,7 +145,11 @@ pub fn ensure_config_file() -> Option<PathBuf> {
          # Set these to your forks if you publish them elsewhere.\n\
          [updates]\n\
          driver_repo = \"neryaAthlan/Div-Linuwu-Sense\"\n\
-         gui_repo = \"neryaAthlan/modern-damx\"\n",
+         gui_repo = \"neryaAthlan/modern-damx\"\n\
+         \n\
+         [ui]\n\
+         # \"celsius\" or \"fahrenheit\"\n\
+         temperature_unit = \"celsius\"\n",
     )
     .ok()?;
     Some(path)

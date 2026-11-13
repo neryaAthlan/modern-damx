@@ -10,6 +10,7 @@
 use anyhow::{Context, Result};
 use damx_core::driver::{self, Driver, Lighting, Status};
 use damx_core::ipc::{self, Request, Response};
+use damx_core::policy::{self, ProfilePolicy};
 use damx_core::preset::BootPreset;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
@@ -75,6 +76,7 @@ fn main() -> Result<()> {
     );
 
     apply_boot_preset_later();
+    watch_power_source();
 
     for stream in listener.incoming() {
         match stream {
@@ -117,9 +119,12 @@ fn handle(request: Request, peer: u32) -> Response {
         Request::Ping => Response::ok(),
         Request::Status => Response::with_status(current_status()),
         Request::BootGet => Response::with_preset(BootPreset::load()),
-        Request::SetProfile { value } => with_driver(peer, "set power profile", |driver| {
-            driver.set_profile(&value)
-        }),
+        Request::PolicyGet => Response::with_policy(ProfilePolicy::load()),
+        Request::PolicySet {
+            limit_on_battery,
+            battery_profile,
+        } => set_policy(peer, limit_on_battery, battery_profile),
+        Request::SetProfile { value } => set_profile(peer, value),
         Request::SetFan { cpu, gpu } => with_driver(peer, "set fan speed", |driver| {
             driver.set_fan(cpu, gpu)
         }),
@@ -189,15 +194,132 @@ where
 fn current_status() -> Status {
     match Driver::discover() {
         Some(driver) => driver.status(),
-        None => Status {
-            driver_loaded: false,
-            kernel: driver::kernel_release(),
-            model: fs::read_to_string("/sys/devices/virtual/dmi/id/product_name")
-                .ok()
-                .map(|s| s.trim().to_string()),
-            ..Default::default()
-        },
+        None => {
+            let mut status = Status {
+                driver_loaded: false,
+                kernel: driver::kernel_release(),
+                model: fs::read_to_string("/sys/devices/virtual/dmi/id/product_name")
+                    .ok()
+                    .map(|s| s.trim().to_string()),
+                on_ac: driver::on_ac(),
+                ..Default::default()
+            };
+            policy::decorate(&mut status);
+            status
+        }
     }
+}
+
+fn set_profile(peer: u32, value: String) -> Response {
+    let Some(driver) = Driver::discover() else {
+        return Response::error("the linuwu_sense driver is not loaded");
+    };
+    let policy = ProfilePolicy::load();
+    if let Some(fallback) = policy::clamp_profile(
+        &value,
+        &driver.profile_choices(),
+        driver::on_ac(),
+        &policy,
+    ) {
+        return Response::error(format!(
+            "on battery the highest available profile is {fallback}; plug in the charger to use {value}"
+        ));
+    }
+    match driver.set_profile(&value) {
+        Ok(()) => {
+            println!("damxd: uid {peer} set power profile to {value}");
+            Response::with_status(driver.status())
+        }
+        Err(err) => Response::error(format!("{err:#}")),
+    }
+}
+
+fn set_policy(peer: u32, limit_on_battery: bool, battery_profile: String) -> Response {
+    let policy = ProfilePolicy {
+        limit_on_battery,
+        battery_profile,
+    };
+    if let Some(driver) = Driver::discover() {
+        let choices = driver.profile_choices();
+        if policy.limit_on_battery
+            && !choices.is_empty()
+            && !choices.iter().any(|c| c == &policy.battery_profile)
+        {
+            return Response::error(format!(
+                "unknown battery profile {:?}",
+                policy.battery_profile
+            ));
+        }
+    }
+    if let Err(err) = policy.save() {
+        return Response::error(format!("{err:#}"));
+    }
+    println!(
+        "damxd: uid {peer} set battery policy (limit={}, profile={})",
+        policy.limit_on_battery, policy.battery_profile
+    );
+    let message = match enforce_policy(&policy) {
+        Ok(message) => message,
+        Err(err) => return Response::error(format!("{err:#}")),
+    };
+    Response {
+        ok: true,
+        message,
+        policy: Some(policy),
+        status: Some(current_status()),
+        ..Default::default()
+    }
+}
+
+/// Re-applies the battery cap to the current profile when needed.
+fn enforce_policy(policy: &ProfilePolicy) -> Result<Option<String>> {
+    let Some(driver) = Driver::discover() else {
+        return Ok(None);
+    };
+    if !policy.limit_on_battery || driver::on_ac() != Some(false) {
+        return Ok(None);
+    }
+    let Some(current) = driver.profile() else {
+        return Ok(None);
+    };
+    let Some(fallback) = policy::clamp_profile(
+        &current,
+        &driver.profile_choices(),
+        Some(false),
+        policy,
+    ) else {
+        return Ok(None);
+    };
+    driver.set_profile(&fallback)?;
+    println!("damxd: on battery, profile {current} -> {fallback}");
+    Ok(Some(format!(
+        "On battery, the profile was limited to {fallback}"
+    )))
+}
+
+/// Watches the charger so unplugging it can never leave a profile above the
+/// battery limit selected. This is what keeps the policy global.
+fn watch_power_source() {
+    thread::spawn(|| {
+        let mut last = driver::on_ac();
+        loop {
+            thread::sleep(Duration::from_secs(2));
+            let current = driver::on_ac();
+            if current == last {
+                continue;
+            }
+            last = current;
+            let policy = ProfilePolicy::load();
+            match current {
+                Some(false) => println!("damxd: charger unplugged"),
+                Some(true) => println!("damxd: charger plugged in"),
+                None => continue,
+            }
+            if let Err(err) = enforce_policy(&policy) {
+                eprintln!("damxd: applying the battery profile failed: {err:#}");
+            }
+        }
+    });
 }
 
 /// The module may load after us at boot, so retry for a while before applying.

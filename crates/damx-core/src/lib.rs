@@ -4,5 +4,6 @@
 pub mod config;
 pub mod driver;
 pub mod ipc;
+pub mod policy;
 pub mod preset;
 pub mod update;

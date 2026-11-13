@@ -116,6 +116,14 @@ pub struct Status {
     pub battery_limiter: Option<bool>,
     pub usb_charging: Option<u8>,
     pub capabilities: Vec<String>,
+    /// `Some(true)` when the charger is connected.
+    pub on_ac: Option<bool>,
+    pub cpu_temp_c: Option<f32>,
+    pub gpu_temp_c: Option<f32>,
+    /// Filled by the profile policy (see `policy::decorate`).
+    pub allowed_profiles: Vec<String>,
+    pub limit_on_battery: bool,
+    pub battery_profile: String,
 }
 
 impl Status {
@@ -283,7 +291,8 @@ impl Driver {
             }
         }
 
-        Status {
+        let (cpu_temp_c, gpu_temp_c) = temperatures();
+        let mut status = Status {
             driver_loaded: true,
             driver_version: dkms_version(),
             model: read_trimmed("/sys/devices/virtual/dmi/id/product_name"),
@@ -296,8 +305,121 @@ impl Driver {
             battery_limiter: self.battery_limiter(),
             usb_charging: self.usb_charging(),
             capabilities,
+            on_ac: on_ac(),
+            cpu_temp_c,
+            gpu_temp_c,
+            allowed_profiles: Vec::new(),
+            limit_on_battery: true,
+            battery_profile: "balanced".to_string(),
+        };
+        crate::policy::decorate(&mut status);
+        status
+    }
+}
+
+/// `Some(true)` when a mains adapter is online, `Some(false)` on battery, and
+/// `None` when no mains supply is exposed (for example on a desktop).
+pub fn on_ac() -> Option<bool> {
+    // DAMX_POWER_SUPPLY exists so the battery policy can be tested without
+    // unplugging the machine.
+    let root = std::env::var_os("DAMX_POWER_SUPPLY")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/sys/class/power_supply"));
+    let entries = fs::read_dir(root).ok()?;
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        let kind = fs::read_to_string(dir.join("type")).ok()?;
+        if kind.trim() != "Mains" {
+            continue;
+        }
+        let online = fs::read_to_string(dir.join("online")).ok()?;
+        return Some(online.trim() == "1");
+    }
+    None
+}
+
+/// CPU and GPU temperatures in degrees Celsius.
+///
+/// The driver's own hwmon device exposes the embedded controller sensors; when
+/// the GPU sensor reads 0 (the dGPU is asleep) the proprietary NVIDIA driver is
+/// asked instead.
+pub fn temperatures() -> (Option<f32>, Option<f32>) {
+    let acer = hwmon_by_name("acer");
+    let cpu = acer
+        .as_ref()
+        .and_then(|dir| read_millidegrees(&dir.join("temp1_input")))
+        .or_else(coretemp_package);
+    let gpu = acer
+        .as_ref()
+        .and_then(|dir| read_millidegrees(&dir.join("temp2_input")))
+        .filter(|value| *value > 0.0)
+        .or_else(nvidia_temperature)
+        .or_else(gpu_hwmon);
+    (cpu, gpu)
+}
+
+fn hwmon_by_name(name: &str) -> Option<PathBuf> {
+    let entries = fs::read_dir("/sys/class/hwmon").ok()?;
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        let Ok(found) = fs::read_to_string(dir.join("name")) else {
+            continue;
+        };
+        if found.trim() == name {
+            return Some(dir);
         }
     }
+    None
+}
+
+fn read_millidegrees(path: &Path) -> Option<f32> {
+    let raw = fs::read_to_string(path).ok()?;
+    let milli: f32 = raw.trim().parse().ok()?;
+    Some((milli / 1000.0 * 10.0).round() / 10.0)
+}
+
+fn coretemp_package() -> Option<f32> {
+    let dir = hwmon_by_name("coretemp")?;
+    let entries = fs::read_dir(&dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name()?.to_string_lossy().to_string();
+        if !name.starts_with("temp") || !name.ends_with("_label") {
+            continue;
+        }
+        if fs::read_to_string(&path).ok()?.trim() == "Package id 0" {
+            let input = dir.join(name.replace("_label", "_input"));
+            return read_millidegrees(&input);
+        }
+    }
+    read_millidegrees(&dir.join("temp1_input"))
+}
+
+fn nvidia_temperature() -> Option<f32> {
+    let output = std::process::Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=temperature.gpu",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    let value: f32 = text.lines().next()?.trim().parse().ok()?;
+    Some((value * 10.0).round() / 10.0)
+}
+
+fn gpu_hwmon() -> Option<f32> {
+    for name in ["amdgpu", "nouveau", "nvidia"] {
+        if let Some(dir) = hwmon_by_name(name) {
+            if let Some(value) = read_millidegrees(&dir.join("temp1_input")) {
+                return Some(value);
+            }
+        }
+    }
+    None
 }
 
 fn sense_candidates() -> Vec<PathBuf> {
