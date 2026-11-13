@@ -42,23 +42,43 @@ small root daemon with a group-restricted Unix socket. This is needed because
 the driver's sysfs attributes are owned by root and sysfs permissions cannot be
 changed after boot.
 
-## Build and install
+## Install
+
+### Easy install — prebuilt binaries
 
 ```bash
-sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev curl
 git clone https://github.com/neryaAthlan/modern-damx
 cd modern-damx
 sudo ./install.sh
 ```
 
-Every `v*` tag is built by GitHub Actions on Debian 13; the release page
-carries the three binaries, a checksum file and a self-contained tarball (source
-and binaries) for offline installs.
+The installer looks up the newest GitHub release, downloads the package for
+your CPU architecture (currently `x86_64`), checks it against `SHA256SUMS` and
+installs the binaries. All it needs is `curl`; no Rust toolchain or development
+packages, because GTK 4 and libadwaita are already part of a GNOME desktop.
 
-The installer has modes:
+Every `v*` tag is built by GitHub Actions on Debian 13, so the release page also
+carries the three standalone binaries and the tarball for offline installs
+(running `install.sh` inside the extracted tarball uses its bundled binaries).
+
+### Expert install — build from source
 
 ```bash
-sudo ./install.sh                        # GUI, CLI and daemon (default)
+sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev curl
+git clone https://github.com/neryaAthlan/modern-damx
+cd modern-damx
+sudo ./install.sh --build
+```
+
+`--build` compiles the workspace with the local toolchain and installs that
+build; the plain `./install.sh` never compiles anything.
+
+### Installer options
+
+```bash
+sudo ./install.sh                        # prebuilt GUI, CLI and daemon (default)
+sudo ./install.sh --build                # compile here, then install (expert)
+sudo ./install.sh --prebuilt             # force the prebuilt download (default)
 sudo ./install.sh --daemon-only          # daemon + CLI only, no GUI
 sudo ./install.sh --with-driver          # also install the Linuwu Sense module
 sudo ./install.sh --with-driver --driver-dir /path/to/Div-Linuwu-Sense

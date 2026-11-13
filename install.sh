@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Installs Modern DAMX system-wide. Run as root: sudo ./install.sh
 #
-#   sudo ./install.sh                     GUI + daemon (default)
+#   sudo ./install.sh                     GUI + daemon, prebuilt from the latest release
+#   sudo ./install.sh --build             build from source, then install
 #   sudo ./install.sh --daemon-only       daemon + CLI, no GUI
 #   sudo ./install.sh --with-driver       also install the Linuwu Sense driver
 #   sudo ./install.sh --uninstall         remove what this script installed
@@ -18,6 +19,8 @@ GROUP="linuwu_sense"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 MODE="full"
+SOURCE="prebuilt"
+RELEASE_BASE="https://github.com/neryaAthlan/modern-damx/releases"
 WITH_DRIVER=0
 UNINSTALL=0
 DRIVER_DIR="${DAMX_DRIVER_DIR:-}"
@@ -32,6 +35,10 @@ Modern DAMX installer
 Usage: sudo ./install.sh [options]
 
 Options:
+  --prebuilt            Download the binaries from the latest GitHub release
+                        (default; no Rust toolchain needed)
+  --build, --from-source
+                        Compile Modern DAMX here, then install that build
   --daemon-only         Install only damxd and the damx CLI (no GUI)
   --with-driver         Also build and install the Linuwu Sense kernel module
   --driver-dir <path>   Driver checkout to use with --with-driver
@@ -39,14 +46,17 @@ Options:
   --uninstall           Remove Modern DAMX (the boot preset is kept)
   -h, --help            Show this help
 
-The default install adds the GUI, the CLI, damxd, the desktop entry, and the
-daily update-check timer. The kernel module is never replaced unless you pass
---with-driver.
+The default install downloads the prebuilt release for your architecture and
+adds the GUI, the CLI, damxd, the desktop entry, and the daily update-check
+timer. Pass --build to compile from source instead. The kernel module is never
+replaced unless you pass --with-driver.
 EOF
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --prebuilt) SOURCE="prebuilt" ;;
+        --build|--from-source) SOURCE="build" ;;
         --daemon-only|--daemon) MODE="daemon" ;;
         --with-driver) WITH_DRIVER=1 ;;
         --driver-dir)
@@ -79,29 +89,88 @@ if [ "$UNINSTALL" -eq 1 ]; then
     exit 0
 fi
 
-command -v cargo >/dev/null || die "cargo is required (install rustc and cargo)"
-if [ "$MODE" = "full" ]; then
-    pkg-config --exists gtk4 || die "libgtk-4-dev is required for the GUI"
-    pkg-config --exists libadwaita-1 || die "libadwaita-1-dev is required for the GUI"
+DOWNLOAD_DIR=""
+cleanup() {
+    if [ -n "$DOWNLOAD_DIR" ]; then
+        rm -rf "$DOWNLOAD_DIR"
+    fi
+}
+trap cleanup EXIT
+
+if [ "$SOURCE" = "prebuilt" ] && [ -x "${SCRIPT_DIR}/damxd" ] && [ -x "${SCRIPT_DIR}/damx" ]; then
+    # Running from an extracted release tarball: use the binaries next to us.
+    info "Using the prebuilt binaries in ${SCRIPT_DIR}"
+    BIN_SRC="${SCRIPT_DIR}"
+    DATA_DIR="${SCRIPT_DIR}/data"
+else
+    case "$SOURCE" in
+        prebuilt)
+            case "$(uname -m)" in
+                x86_64|amd64) ARCH="x86_64" ;;
+                aarch64|arm64) ARCH="aarch64" ;;
+                *) die "no prebuilt binaries for $(uname -m); rerun with --build to compile from source" ;;
+            esac
+            command -v curl >/dev/null || die "curl is required to download the prebuilt binaries"
+            command -v sha256sum >/dev/null || die "sha256sum is required to verify the download"
+
+            info "Looking up the latest release"
+            TAG_URL="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "${RELEASE_BASE}/latest")" \
+                || die "could not reach GitHub; rerun with --build to compile from source"
+            TAG="${TAG_URL##*/}"
+            [ -n "$TAG" ] || die "could not determine the latest release tag"
+            PKG="modern-damx-${TAG}-${ARCH}-linux.tar.gz"
+            DOWNLOAD_DIR="$(mktemp -d)"
+
+            info "Downloading ${PKG} from release ${TAG}"
+            curl -fsSL --retry 3 -o "${DOWNLOAD_DIR}/${PKG}" \
+                "${RELEASE_BASE}/download/${TAG}/${PKG}" \
+                || die "no prebuilt ${ARCH} package in ${TAG}; rerun with --build to compile from source"
+            curl -fsSL --retry 3 -o "${DOWNLOAD_DIR}/SHA256SUMS" \
+                "${RELEASE_BASE}/download/${TAG}/SHA256SUMS" \
+                || die "could not download SHA256SUMS for ${TAG}"
+            (cd "$DOWNLOAD_DIR" && grep -F " ${PKG}" SHA256SUMS | sha256sum -c -) \
+                || die "checksum verification failed for ${PKG}"
+
+            tar -xzf "${DOWNLOAD_DIR}/${PKG}" -C "$DOWNLOAD_DIR"
+            BIN_SRC="${DOWNLOAD_DIR}/modern-damx-${TAG}-${ARCH}-linux"
+            DATA_DIR="${BIN_SRC}/data"
+            ;;
+        build)
+            command -v cargo >/dev/null || die "cargo is required (install rustc and cargo)"
+            if [ "$MODE" = "full" ]; then
+                pkg-config --exists gtk4 || die "libgtk-4-dev is required for the GUI"
+                pkg-config --exists libadwaita-1 || die "libadwaita-1-dev is required for the GUI"
+            fi
+
+            info "Building release binaries"
+            if [ "$MODE" = "full" ]; then
+                (cd "$SCRIPT_DIR" && cargo build --release --workspace)
+            else
+                (cd "$SCRIPT_DIR" && cargo build --release -p damx-daemon -p damx-cli)
+            fi
+            # We run as root, so give the build tree back to the user who invoked us.
+            if [ -n "${SUDO_USER:-}" ] && [ -d "${SCRIPT_DIR}/target" ]; then
+                chown -R "${SUDO_USER}:" "${SCRIPT_DIR}/target" 2>/dev/null || true
+            fi
+            BIN_SRC="${SCRIPT_DIR}/target/release"
+            DATA_DIR="${SCRIPT_DIR}/data"
+            ;;
+    esac
 fi
 
-info "Building release binaries"
+[ -x "${BIN_SRC}/damxd" ] && [ -x "${BIN_SRC}/damx" ] \
+    || die "the package is missing the damxd and damx binaries"
 if [ "$MODE" = "full" ]; then
-    (cd "$SCRIPT_DIR" && cargo build --release --workspace)
-else
-    (cd "$SCRIPT_DIR" && cargo build --release -p damx-daemon -p damx-cli)
+    [ -x "${BIN_SRC}/damx-gui" ] || die "this package has no GUI binary; use --daemon-only"
 fi
-# We run as root, so give the build tree back to the user who invoked us.
-if [ -n "${SUDO_USER:-}" ] && [ -d "${SCRIPT_DIR}/target" ]; then
-    chown -R "${SUDO_USER}:" "${SCRIPT_DIR}/target" 2>/dev/null || true
-fi
+[ -f "${DATA_DIR}/damxd.service" ] || die "the package is missing its systemd units"
 
 info "Installing binaries to ${BINDIR}"
 install -d "${BINDIR}"
-install -m 0755 "${SCRIPT_DIR}/target/release/damxd" "${BINDIR}/damxd"
-install -m 0755 "${SCRIPT_DIR}/target/release/damx" "${BINDIR}/damx"
+install -m 0755 "${BIN_SRC}/damxd" "${BINDIR}/damxd"
+install -m 0755 "${BIN_SRC}/damx" "${BINDIR}/damx"
 if [ "$MODE" = "full" ]; then
-    install -m 0755 "${SCRIPT_DIR}/target/release/damx-gui" "${BINDIR}/damx-gui"
+    install -m 0755 "${BIN_SRC}/damx-gui" "${BINDIR}/damx-gui"
 fi
 
 if ! getent group "${GROUP}" >/dev/null; then
@@ -111,15 +180,15 @@ fi
 
 info "Installing systemd units"
 install -d "${UNITDIR}" "${USERUNITDIR}"
-install -m 0644 "${SCRIPT_DIR}/data/damxd.service" "${UNITDIR}/damxd.service"
-install -m 0644 "${SCRIPT_DIR}/data/damx-update-check.service" "${USERUNITDIR}/damx-update-check.service"
-install -m 0644 "${SCRIPT_DIR}/data/damx-update-check.timer" "${USERUNITDIR}/damx-update-check.timer"
+install -m 0644 "${DATA_DIR}/damxd.service" "${UNITDIR}/damxd.service"
+install -m 0644 "${DATA_DIR}/damx-update-check.service" "${USERUNITDIR}/damx-update-check.service"
+install -m 0644 "${DATA_DIR}/damx-update-check.timer" "${USERUNITDIR}/damx-update-check.timer"
 
 if [ "$MODE" = "full" ]; then
     info "Installing desktop entry and icon"
     install -d "${APPDIR}" "${ICONDIR}"
-    install -m 0644 "${SCRIPT_DIR}/data/io.github.neryaathlan.Damx.desktop" "${APPDIR}/io.github.neryaathlan.Damx.desktop"
-    install -m 0644 "${SCRIPT_DIR}/data/io.github.neryaathlan.Damx.svg" "${ICONDIR}/io.github.neryaathlan.Damx.svg"
+    install -m 0644 "${DATA_DIR}/io.github.neryaathlan.Damx.desktop" "${APPDIR}/io.github.neryaathlan.Damx.desktop"
+    install -m 0644 "${DATA_DIR}/io.github.neryaathlan.Damx.svg" "${ICONDIR}/io.github.neryaathlan.Damx.svg"
     if command -v update-desktop-database >/dev/null; then
         update-desktop-database "${APPDIR}" || true
     fi
