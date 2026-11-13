@@ -1,0 +1,7 @@
+[Unit]
+Description=Check for new DAMX and Linuwu Sense releases
+Documentation=https://github.com/neryaAthlan/modern-damx
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/damx update

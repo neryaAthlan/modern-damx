@@ -1,0 +1,17 @@
+[Unit]
+Description=DAMX helper daemon (Acer fan, power profile and keyboard lighting)
+Documentation=https://github.com/neryaAthlan/modern-damx
+After=power-profiles-daemon.service systemd-modules-load.service
+# Apply the boot preset after GNOME's power daemon has picked its own mode.
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/sbin/modprobe linuwu_sense
+ExecStart=/usr/bin/damxd
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=damxd
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

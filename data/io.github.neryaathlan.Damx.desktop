@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Modern DAMX
+GenericName=Acer Laptop Manager
+Comment=Control power profile, fans and keyboard lighting
+Exec=damx-gui
+Icon=io.github.neryaathlan.Damx
+Terminal=false
+Categories=System;Settings;HardwareSettings;
+Keywords=acer;nitro;predator;fan;rgb;keyboard;power;profile;
+StartupNotify=true

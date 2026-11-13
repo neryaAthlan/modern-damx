@@ -1,0 +1,17 @@
+[package]
+name = "damx-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "damxd"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+damx-core.workspace = true
+libc.workspace = true
