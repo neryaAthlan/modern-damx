@@ -222,6 +222,9 @@ fn cmd_status(args: &[String]) -> Result<()> {
             format!("  (choices: {})", status.profile_choices.join(", "))
         }
     );
+    if let Some((cpu, gpu)) = status.fan_rpm {
+        println!("Fan RPM:           CPU {cpu} · GPU {gpu}");
+    }
     if let Some(fan) = status.fan {
         println!(
             "Fan speed:         {}",

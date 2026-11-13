@@ -11,6 +11,7 @@ struct Rows {
     power: adw::ActionRow,
     profile: adw::ActionRow,
     fan: adw::ActionRow,
+    fan_rpm: adw::ActionRow,
     cpu_temp: adw::ActionRow,
     gpu_temp: adw::ActionRow,
     keyboard: adw::ActionRow,
@@ -42,10 +43,15 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
         .subtitle("—")
         .build();
     let fan_row = adw::ActionRow::builder().title("Fan speed").subtitle("—").build();
+    let fan_rpm_row = adw::ActionRow::builder()
+        .title("Fan RPM")
+        .subtitle("—")
+        .build();
     device.add(&driver_row);
     device.add(&power_row);
     device.add(&profile_row);
     device.add(&fan_row);
+    device.add(&fan_rpm_row);
 
     let thermal = adw::PreferencesGroup::builder()
         .title("Temperatures")
@@ -109,6 +115,7 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
         power: power_row,
         profile: profile_row,
         fan: fan_row,
+        fan_rpm: fan_rpm_row,
         cpu_temp: cpu_temp_row,
         gpu_temp: gpu_temp_row,
         keyboard: keyboard_row,
@@ -203,6 +210,12 @@ fn render(status: &Status, unit: TemperatureUnit, rows: &Rows) {
         Some(fan) => format!("CPU {}% · GPU {}%", fan.cpu, fan.gpu),
         None => "not available".to_string(),
     });
+
+    if let Some((cpu, gpu)) = status.fan_rpm {
+        rows.fan_rpm.set_subtitle(&format!("CPU {cpu} RPM · GPU {gpu} RPM"));
+    } else {
+        rows.fan_rpm.set_subtitle("not available");
+    }
 
     rows.cpu_temp.set_subtitle(&unit.format(status.cpu_temp_c));
     rows.gpu_temp.set_subtitle(&unit.format(status.gpu_temp_c));

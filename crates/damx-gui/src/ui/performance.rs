@@ -62,10 +62,16 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
         scale.set_value(50.0);
     }
 
-    let cpu_row = adw::ActionRow::builder().title("CPU fan").build();
+    let cpu_row = adw::ActionRow::builder()
+        .title("CPU fan")
+        .subtitle("—")
+        .build();
     cpu_row.add_suffix(&cpu_scale);
     cpu_row.set_activatable(false);
-    let gpu_row = adw::ActionRow::builder().title("GPU fan").build();
+    let gpu_row = adw::ActionRow::builder()
+        .title("GPU fan")
+        .subtitle("—")
+        .build();
     gpu_row.add_suffix(&gpu_scale);
     gpu_row.set_activatable(false);
     fan_group.add(&cpu_row);
@@ -273,6 +279,8 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
         let cap_row = cap_row.clone();
         let cpu_temp_row = cpu_temp_row.clone();
         let gpu_temp_row = gpu_temp_row.clone();
+        let cpu_row = cpu_row.clone();
+        let gpu_row = gpu_row.clone();
 
         Rc::new(move || {
             let state = state.clone();
@@ -286,6 +294,8 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
             let cap_row = cap_row.clone();
             let cpu_temp_row = cpu_temp_row.clone();
             let gpu_temp_row = gpu_temp_row.clone();
+            let cpu_row = cpu_row.clone();
+            let gpu_row = gpu_row.clone();
 
             spawn(super::super::backend::snapshot, move |snapshot| {
                 let status = snapshot.status;
@@ -294,6 +304,13 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
                 syncing.set(true);
                 cpu_temp_row.set_subtitle(&unit.format(status.cpu_temp_c));
                 gpu_temp_row.set_subtitle(&unit.format(status.gpu_temp_c));
+                if let Some((cpu, gpu)) = status.fan_rpm {
+                    cpu_row.set_subtitle(&format!("{cpu} RPM"));
+                    gpu_row.set_subtitle(&format!("{gpu} RPM"));
+                } else {
+                    cpu_row.set_subtitle("RPM not available");
+                    gpu_row.set_subtitle("RPM not available");
+                }
 
                 *state.all.borrow_mut() = status.profile_choices.clone();
                 let allowed = status.allowed_profiles.clone();

@@ -19,7 +19,7 @@ light/dark theme.
 | Temperatures | CPU and GPU readings from the Acer embedded controller, with the NVIDIA driver as a fallback; Celsius or Fahrenheit preference |
 | Power profile | All five profiles the driver exposes: `low-power`, `quiet`, `balanced`, `balanced-performance`, `performance` |
 | Battery limit | On battery the profile is capped (default `balanced`); plugging in makes every profile available again |
-| Fan speed | Automatic (embedded controller) or manual CPU/GPU percentage |
+| Fan speed | Automatic (embedded controller) or manual CPU/GPU percentage, with live RPM readouts on both the status and fan pages |
 | Keyboard | Per-zone colours for the four-zone RGB keyboard, brightness, and the 30-second backlight timeout |
 | Battery | Battery limiter (charge to 80%) toggle |
 | Boot preset | Stores profile, fan speed and/or lighting and applies them at every boot via `damxd` |

@@ -120,6 +120,8 @@ pub struct Status {
     pub on_ac: Option<bool>,
     pub cpu_temp_c: Option<f32>,
     pub gpu_temp_c: Option<f32>,
+    /// Current fan speeds in RPM, `(cpu, gpu)`.
+    pub fan_rpm: Option<(u32, u32)>,
     /// Filled by the profile policy (see `policy::decorate`).
     pub allowed_profiles: Vec<String>,
     pub limit_on_battery: bool,
@@ -292,6 +294,7 @@ impl Driver {
         }
 
         let (cpu_temp_c, gpu_temp_c) = temperatures();
+        let fan_rpm = fan_rpm();
         let mut status = Status {
             driver_loaded: true,
             driver_version: dkms_version(),
@@ -308,6 +311,7 @@ impl Driver {
             on_ac: on_ac(),
             cpu_temp_c,
             gpu_temp_c,
+            fan_rpm,
             allowed_profiles: Vec::new(),
             limit_on_battery: true,
             battery_profile: "balanced".to_string(),
@@ -356,6 +360,18 @@ pub fn temperatures() -> (Option<f32>, Option<f32>) {
         .or_else(nvidia_temperature)
         .or_else(gpu_hwmon);
     (cpu, gpu)
+}
+
+/// Current fan speeds in RPM from the driver's hwmon device: `(CPU, GPU)`.
+pub fn fan_rpm() -> Option<(u32, u32)> {
+    let dir = hwmon_by_name("acer")?;
+    let cpu = read_rpm(&dir.join("fan1_input"))?;
+    let gpu = read_rpm(&dir.join("fan2_input")).unwrap_or(0);
+    Some((cpu, gpu))
+}
+
+fn read_rpm(path: &Path) -> Option<u32> {
+    fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
 fn hwmon_by_name(name: &str) -> Option<PathBuf> {
