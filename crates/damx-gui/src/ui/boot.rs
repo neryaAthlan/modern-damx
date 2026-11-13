@@ -2,6 +2,7 @@ use super::{send, spawn, Ctx};
 use adw::prelude::*;
 use damx_core::driver::Status;
 use damx_core::ipc::Request;
+use damx_core::policy::{self, ProfilePolicy};
 use damx_core::preset::BootPreset;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,18 +18,14 @@ impl View {
     /// Shows which parts of the saved preset are active. Nothing is written
     /// here: only the save button changes the preset, so merely opening the
     /// page can never clobber it.
-    fn render(&self, preset: &BootPreset, has_status: bool) {
+    fn render(&self, preset: &BootPreset, status: Option<&Status>) {
         self.enabled.set_active(preset.enabled);
         self.profile.set_active(preset.profile.is_some());
         self.fan.set_active(preset.fan.is_some());
         self.lighting.set_active(preset.lighting.is_some());
 
-        self.profile.set_subtitle(
-            preset
-                .profile
-                .as_deref()
-                .unwrap_or("not applied at boot"),
-        );
+        self.profile
+            .set_subtitle(&profile_subtitle(preset, status));
         self.fan.set_subtitle(&match preset.fan {
             Some(fan) if fan.is_auto() => "automatic".to_string(),
             Some(fan) => format!("CPU {}% · GPU {}%", fan.cpu, fan.gpu),
@@ -39,7 +36,7 @@ impl View {
             None => "not applied at boot".to_string(),
         });
 
-        let sensitive = has_status;
+        let sensitive = status.is_some();
         self.profile.set_sensitive(sensitive);
         self.fan.set_sensitive(sensitive);
         self.lighting.set_sensitive(sensitive);
@@ -88,14 +85,15 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
     let preset_state = Rc::new(RefCell::new(backend_boot()));
     let status_state = Rc::new(RefCell::new(None::<Status>));
 
-    view.render(&preset_state.borrow(), false);
+    view.render(&preset_state.borrow(), None);
     {
         let view = view.clone();
         let preset_state = preset_state.clone();
         let status_state = status_state.clone();
         spawn(super::super::backend::snapshot, move |snapshot| {
-            *status_state.borrow_mut() = Some(snapshot.status);
-            view.render(&preset_state.borrow(), true);
+            let status = snapshot.status;
+            view.render(&preset_state.borrow(), Some(&status));
+            *status_state.borrow_mut() = Some(status);
         });
     }
 
@@ -124,7 +122,8 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
                 return;
             }
             *preset_state.borrow_mut() = preset.clone();
-            view.render(&preset, true);
+            let status = status_state.borrow().clone();
+            view.render(&preset, status.as_ref());
 
             let ctx = ctx.clone();
             let request = Request::BootSave { preset };
@@ -146,6 +145,28 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
     }
 
     page.upcast()
+}
+
+/// Shows the saved profile and what it becomes on battery when the global
+/// policy caps it, so it is clear the preset has two effective profiles.
+fn profile_subtitle(preset: &BootPreset, status: Option<&Status>) -> String {
+    let Some(profile) = preset.profile.as_deref() else {
+        return "not applied at boot".to_string();
+    };
+    let Some(status) = status else {
+        return profile.to_string();
+    };
+    let policy = ProfilePolicy {
+        limit_on_battery: status.limit_on_battery,
+        battery_profile: status.battery_profile.clone(),
+    };
+    let on_battery = policy::clamp_profile(profile, &status.profile_choices, Some(false), &policy)
+        .unwrap_or_else(|| profile.to_string());
+    if on_battery == profile {
+        format!("{profile} plugged in and on battery")
+    } else {
+        format!("{profile} plugged in · {on_battery} on battery")
+    }
 }
 
 fn backend_boot() -> BootPreset {
