@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build and attach binaries
+    runs-on: ubuntu-latest
+    # Debian 13 is the target distribution and ships the GTK 4 / libadwaita
+    # versions the GUI needs, so build inside it instead of on the runner.
+    container: debian:trixie
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
+            ca-certificates curl
+
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binaries
+        run: cargo build --release --locked --workspace
+
+      - name: Package artifacts
+        run: |
+          set -euo pipefail
+          name="modern-damx-${GITHUB_REF_NAME}-x86_64-linux"
+          mkdir -p dist
+          install -m 0755 target/release/damx dist/damx
+          install -m 0755 target/release/damxd dist/damxd
+          install -m 0755 target/release/damx-gui dist/damx-gui
+          mkdir -p "dist/$name"
+          # Include the full source so the bundled install.sh still works.
+          cp -r dist/damx dist/damxd dist/damx-gui README.md LICENSE install.sh \
+            Cargo.toml Cargo.lock crates data "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          rm -rf "dist/$name"
+          (cd dist && sha256sum damx damxd damx-gui "modern-damx-${GITHUB_REF_NAME}-x86_64-linux.tar.gz" > SHA256SUMS)
+
+      - name: Attach to the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
