@@ -1,5 +1,6 @@
 pub mod boot;
 pub mod credits;
+pub mod daemon;
 pub mod keyboard;
 pub mod performance;
 pub mod status;
@@ -100,6 +101,13 @@ pub fn build(app: &adw::Application) -> adw::ApplicationWindow {
         "boot",
         "Boot preset",
         "system-reboot-symbolic",
+    );
+    add_page(
+        &stack,
+        &daemon::build(&ctx),
+        "daemon",
+        "Daemon",
+        "utilities-terminal-symbolic",
     );
     add_page(
         &stack,

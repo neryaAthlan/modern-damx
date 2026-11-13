@@ -1,8 +1,9 @@
 [Unit]
 Description=DAMX helper daemon (Acer fan, power profile and keyboard lighting)
 Documentation=https://github.com/neryaAthlan/modern-damx
-After=power-profiles-daemon.service systemd-modules-load.service
-# Apply the boot preset after GNOME's power daemon has picked its own mode.
+After=systemd-modules-load.service
+# The boot preset is applied from a short delay inside damxd itself, so it
+# wins over power-profiles-daemon without creating a startup ordering cycle.
 
 [Service]
 Type=simple

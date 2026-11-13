@@ -325,6 +325,9 @@ fn watch_power_source() {
 /// The module may load after us at boot, so retry for a while before applying.
 fn apply_boot_preset_later() {
     thread::spawn(|| {
+        // power-profiles-daemon starts after multi-user.target; waiting here
+        // lets it pick its own mode first so the boot preset wins.
+        thread::sleep(Duration::from_secs(5));
         let preset = BootPreset::load();
         if !preset.enabled || preset.is_empty() {
             println!("damxd: no boot preset configured");
