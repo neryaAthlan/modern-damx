@@ -214,7 +214,7 @@ fi
 
 systemctl daemon-reload
 info "Starting damxd"
-systemctl enable damxd.service
+systemctl enable --now damxd.service
 # restart, not just start: an already running daemon must pick up the new binary
 systemctl restart damxd.service
 

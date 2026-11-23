@@ -13,7 +13,10 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 pub const PLATFORM_PROFILE: &str = "/sys/firmware/acpi/platform_profile";
@@ -112,7 +115,8 @@ pub struct Status {
     pub profile_choices: Vec<String>,
     pub fan: Option<Fan>,
     pub lighting: Option<Lighting>,
-    pub backlight_timeout: Option<bool>,
+    /// Keyboard idle timeout in seconds; zero disables the timeout.
+    pub backlight_timeout: Option<u16>,
     pub battery_limiter: Option<bool>,
     pub usb_charging: Option<u8>,
     pub capabilities: Vec<String>,
@@ -122,9 +126,8 @@ pub struct Status {
     pub gpu_temp_c: Option<f32>,
     /// Current fan speeds in RPM, `(cpu, gpu)`.
     pub fan_rpm: Option<(u32, u32)>,
-    /// Filled by the profile policy (see `policy::decorate`).
-    pub allowed_profiles: Vec<String>,
-    pub limit_on_battery: bool,
+    /// Saved profiles for the two power sources.
+    pub ac_profile: String,
     pub battery_profile: String,
 }
 
@@ -233,27 +236,44 @@ impl Driver {
     }
 
     pub fn lighting(&self) -> Option<Lighting> {
+        if !enek5130_hid_devices().is_empty() {
+            if let Some(lighting) = load_hid_lighting() {
+                return Some(lighting);
+            }
+        }
         let path = self.kb_attr("per_zone_mode")?;
         Lighting::parse(&fs::read_to_string(path).ok()?)
     }
 
     pub fn set_lighting(&self, lighting: &Lighting) -> Result<()> {
+        if !enek5130_hid_devices().is_empty() {
+            set_enek5130_lighting(lighting)?;
+            save_hid_lighting(lighting)?;
+            return Ok(());
+        }
+
         let path = self
             .kb_attr("per_zone_mode")
             .ok_or_else(|| anyhow!("this laptop does not expose a four-zone keyboard"))?;
         self.write_attr(&path, &lighting.to_sysfs())
     }
 
-    pub fn backlight_timeout(&self) -> Option<bool> {
-        self.read_bool("backlight_timeout")
+    pub fn backlight_timeout(&self) -> Option<u16> {
+        self.read_attr("backlight_timeout")?
+            .parse::<u16>()
+            .ok()
+            .filter(|seconds| *seconds <= 255)
     }
 
-    pub fn set_backlight_timeout(&self, enabled: bool) -> Result<()> {
+    pub fn set_backlight_timeout(&self, seconds: u16) -> Result<()> {
+        if seconds > 255 {
+            bail!("keyboard timeout must be between 0 and 255 seconds");
+        }
         let path = self.attr("backlight_timeout");
         if !path.exists() {
             bail!("backlight_timeout is not available on this laptop");
         }
-        self.write_attr(&path, if enabled { "1" } else { "0" })
+        self.write_attr(&path, &seconds.to_string())
     }
 
     pub fn battery_limiter(&self) -> Option<bool> {
@@ -312,8 +332,7 @@ impl Driver {
             cpu_temp_c,
             gpu_temp_c,
             fan_rpm,
-            allowed_profiles: Vec::new(),
-            limit_on_battery: true,
+            ac_profile: "balanced".to_string(),
             battery_profile: "balanced".to_string(),
         };
         crate::policy::decorate(&mut status);
@@ -472,6 +491,138 @@ fn sense_candidates() -> Vec<PathBuf> {
     }
 
     out
+}
+
+/// Find Acer's ENEK5130 keyboard controller by its stable HID identity.
+/// On newer Nitro keyboards, RGB sysfs writes may be accepted without
+/// changing the LEDs; those models need direct HID feature reports.
+fn enek5130_hid_devices() -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir("/dev") else {
+        return Vec::new();
+    };
+    let mut devices = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("hidraw") {
+            continue;
+        }
+        let uevent = Path::new("/sys/class/hidraw")
+            .join(&name)
+            .join("device/uevent");
+        let Ok(identity) = fs::read_to_string(uevent) else {
+            continue;
+        };
+        if identity.contains("HID_ID=0018:00000CF2:00005130")
+            || identity.contains("HID_NAME=ENEK5130:00 0CF2:5130")
+        {
+            devices.push(entry.path());
+        }
+    }
+    devices.sort();
+    devices
+}
+
+/// Apply four-zone colors through ENEK5130 HID feature reports, matching the
+/// working backend in legacy DAMX (report 0xA4/0x21, static effect 0x02).
+fn set_enek5130_lighting(lighting: &Lighting) -> Result<()> {
+    let devices = enek5130_hid_devices();
+    if devices.is_empty() {
+        bail!("ENEK5130 HID keyboard was not found");
+    }
+
+    let mut last_error = None;
+    for device in devices {
+        match set_enek5130_lighting_on_device(&device, lighting) {
+            Ok(()) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow!("no usable ENEK5130 HID device")))
+}
+
+fn set_enek5130_lighting_on_device(device: &Path, lighting: &Lighting) -> Result<()> {
+    let hid = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(device)
+        .with_context(|| format!("opening {}", device.display()))?;
+
+    for (zone, mask) in lighting.zones.iter().zip([0x01u8, 0x02, 0x04, 0x08]) {
+        let color = normalize_zone(zone);
+        let red = u8::from_str_radix(&color[0..2], 16)?;
+        let green = u8::from_str_radix(&color[2..4], 16)?;
+        let blue = u8::from_str_radix(&color[4..6], 16)?;
+        let mut report = [
+            0xA4,
+            0x21,
+            0x02,
+            lighting.brightness.min(100),
+            0x00,
+            0x00,
+            red,
+            green,
+            blue,
+            mask,
+            0x00,
+        ];
+        let request = hid_ioc_set_feature(report.len());
+        // SAFETY: report is writable storage of exactly the size encoded in
+        // the matching HIDIOCSFEATURE request.
+        let result = unsafe {
+            libc::ioctl(
+                hid.as_raw_fd(),
+                request,
+                report.as_mut_ptr().cast::<libc::c_void>(),
+            )
+        };
+        if result < 0 {
+            return Err(io::Error::last_os_error())
+                .with_context(|| format!("sending ENEK5130 color for zone mask {mask:#04x}"));
+        }
+    }
+    Ok(())
+}
+
+fn hid_lighting_path() -> PathBuf {
+    PathBuf::from("/etc/damxd/lighting.toml")
+}
+
+fn load_hid_lighting() -> Option<Lighting> {
+    fs::read_to_string(hid_lighting_path())
+        .ok()
+        .and_then(|contents| toml::from_str(&contents).ok())
+}
+
+fn save_hid_lighting(lighting: &Lighting) -> Result<()> {
+    let path = hid_lighting_path();
+    let directory = path
+        .parent()
+        .ok_or_else(|| anyhow!("invalid ENEK5130 lighting state path"))?;
+    fs::create_dir_all(directory)
+        .with_context(|| format!("creating {}", directory.display()))?;
+    let temporary = path.with_extension("toml.tmp");
+    let contents = toml::to_string_pretty(lighting).context("serialising ENEK5130 lighting")?;
+    fs::write(&temporary, contents)
+        .with_context(|| format!("writing {}", temporary.display()))?;
+    fs::rename(&temporary, &path)
+        .with_context(|| format!("replacing {}", path.display()))
+}
+
+/// Linux hidraw's HIDIOCSFEATURE(length): _IOC(_IOC_WRITE | _IOC_READ,
+/// 'H', 0x06, length).
+fn hid_ioc_set_feature(length: usize) -> libc::c_ulong {
+    const IOC_NRBITS: u32 = 8;
+    const IOC_TYPEBITS: u32 = 8;
+    const IOC_SIZEBITS: u32 = 14;
+    const IOC_TYPESHIFT: u32 = IOC_NRBITS;
+    const IOC_SIZESHIFT: u32 = IOC_TYPESHIFT + IOC_TYPEBITS;
+    const IOC_DIRSHIFT: u32 = IOC_SIZESHIFT + IOC_SIZEBITS;
+    const IOC_READ_WRITE: u32 = 3;
+    ((IOC_READ_WRITE << IOC_DIRSHIFT)
+        | (u32::from(b'H') << IOC_TYPESHIFT)
+        | 0x06
+        | ((length as u32) << IOC_SIZESHIFT)) as libc::c_ulong
 }
 
 fn read_trimmed(path: &str) -> Option<String> {

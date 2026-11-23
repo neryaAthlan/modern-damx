@@ -7,7 +7,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use damx_core::config;
 use damx_core::driver::{Driver, Lighting, Status};
 use damx_core::ipc::{self, Request, Response};
-use damx_core::policy::{self, ProfilePolicy};
+use damx_core::policy::ProfilePreferences;
 use damx_core::preset::BootPreset;
 use damx_core::update;
 use std::process::ExitCode;
@@ -37,10 +37,10 @@ fn run() -> Result<()> {
     match command {
         "status" => cmd_status(rest),
         "profile" => cmd_profile(rest),
+        "profiles" => cmd_profiles(rest),
         "fan" => cmd_fan(rest),
         "light" => cmd_light(rest),
         "boot" => cmd_boot(rest),
-        "policy" => cmd_policy(rest),
         "update" => cmd_update(rest),
         "help" | "-h" | "--help" => {
             print_help();
@@ -86,46 +86,38 @@ fn direct(request: Request) -> Result<Response> {
         Request::Ping => Response::ok(),
         Request::Status => Response::with_status(read_status()),
         Request::BootGet => Response::with_preset(BootPreset::load()),
-        Request::PolicyGet => Response::with_policy(ProfilePolicy::load()),
-        Request::PolicySet {
-            limit_on_battery,
+        Request::ProfilePreferencesGet => {
+            Response::with_profile_preferences(ProfilePreferences::load())
+        }
+        Request::ProfilePreferencesSet {
+            ac_profile,
             battery_profile,
         } => {
-            let policy = ProfilePolicy {
-                limit_on_battery,
+            let preferences = ProfilePreferences {
+                ac_profile,
                 battery_profile,
             };
-            policy.save()?;
-            if policy.limit_on_battery && damx_core::driver::on_ac() == Some(false) {
+            if let Some(driver) = Driver::discover() {
+                preferences.validate(&driver.profile_choices())?;
+            }
+            preferences.save()?;
+            if let Some(profile) = preferences.for_source(damx_core::driver::on_ac()) {
                 if let Some(driver) = Driver::discover() {
-                    if let Some(current) = driver.profile() {
-                        if let Some(fallback) = policy::clamp_profile(
-                            &current,
-                            &driver.profile_choices(),
-                            Some(false),
-                            &policy,
-                        ) {
-                            driver.set_profile(&fallback)?;
-                        }
-                    }
+                    driver.set_profile(profile)?;
                 }
             }
-            Response::with_policy(policy)
+            Response::with_profile_preferences(preferences)
         }
         Request::SetProfile { value } => {
             let driver = driver()?;
-            let policy = ProfilePolicy::load();
-            if let Some(fallback) = policy::clamp_profile(
-                &value,
-                &driver.profile_choices(),
-                damx_core::driver::on_ac(),
-                &policy,
-            ) {
-                bail!(
-                    "on battery the highest available profile is {fallback}; plug in the charger to use {value}"
-                );
-            }
             driver.set_profile(&value)?;
+            let mut preferences = ProfilePreferences::load();
+            match damx_core::driver::on_ac() {
+                Some(true) => preferences.ac_profile = value,
+                Some(false) => preferences.battery_profile = value,
+                None => {}
+            }
+            preferences.save()?;
             Response::with_status(driver.status())
         }
         Request::SetFan { cpu, gpu } => {
@@ -136,8 +128,8 @@ fn direct(request: Request) -> Result<Response> {
             driver()?.set_lighting(&Lighting { zones, brightness })?;
             Response::with_status(driver()?.status())
         }
-        Request::SetBacklightTimeout { value } => {
-            driver()?.set_backlight_timeout(value)?;
+        Request::SetBacklightTimeout { seconds } => {
+            driver()?.set_backlight_timeout(seconds)?;
             Response::with_status(driver()?.status())
         }
         Request::SetBatteryLimiter { value } => {
@@ -158,6 +150,9 @@ fn direct(request: Request) -> Result<Response> {
                 bail!("{}", errors.join("; "));
             }
             Response::with_status(read_status())
+        }
+        Request::ResetDefaults { .. } => {
+            bail!("reset defaults requires the damxd service")
         }
     })
 }
@@ -236,12 +231,8 @@ fn cmd_status(args: &[String]) -> Result<()> {
         );
     }
     println!(
-        "Battery policy:    {}",
-        if status.limit_on_battery {
-            format!("limit to {}", status.battery_profile)
-        } else {
-            "no limit on battery".to_string()
-        }
+        "Configured profiles: AC {} · battery {}",
+        status.ac_profile, status.battery_profile
     );
     if let Some(lighting) = &status.lighting {
         println!(
@@ -256,7 +247,7 @@ fn cmd_status(args: &[String]) -> Result<()> {
         );
     }
     if let Some(timeout) = status.backlight_timeout {
-        println!("Backlight timeout: {}", if timeout { "on (30s)" } else { "off" });
+        println!("Backlight timeout: {}", if timeout == 0 { "off".to_string() } else { format!("{timeout}s") });
     }
     if let Some(limiter) = status.battery_limiter {
         println!("Battery limiter:   {}", if limiter { "on" } else { "off" });
@@ -429,41 +420,43 @@ fn cmd_boot(args: &[String]) -> Result<()> {
     }
 }
 
-fn cmd_policy(args: &[String]) -> Result<()> {
-    let policy = match ipc::call(&Request::PolicyGet) {
-        Ok(response) => response.policy,
-        Err(_) => Some(ProfilePolicy::load()),
+fn cmd_profiles(args: &[String]) -> Result<()> {
+    let mut preferences = match ipc::call(&Request::ProfilePreferencesGet) {
+        Ok(response) => response.profile_preferences,
+        Err(_) => Some(ProfilePreferences::load()),
     }
     .unwrap_or_default();
 
-    match args.first().map(String::as_str) {
-        None | Some("show") => {
-            println!(
-                "Battery profile limit: {}",
-                if policy.limit_on_battery {
-                    format!("on (max {})", policy.battery_profile)
-                } else {
-                    "off".to_string()
-                }
-            );
+    match args {
+        [] => {
+            println!("Plugged in: {}", preferences.ac_profile);
+            println!("On battery: {}", preferences.battery_profile);
             Ok(())
         }
-        Some("off") => {
-            send(Request::PolicySet {
-                limit_on_battery: false,
-                battery_profile: policy.battery_profile,
+        [show] if show == "show" => {
+            println!("Plugged in: {}", preferences.ac_profile);
+            println!("On battery: {}", preferences.battery_profile);
+            Ok(())
+        }
+        [source, profile] if source == "ac" || source == "plugged-in" => {
+            preferences.ac_profile = profile.clone();
+            send(Request::ProfilePreferencesSet {
+                ac_profile: preferences.ac_profile,
+                battery_profile: preferences.battery_profile,
             })?;
-            println!("battery profile limit disabled");
+            println!("plugged-in profile set to {profile}");
             Ok(())
         }
-        Some(profile) => {
-            send(Request::PolicySet {
-                limit_on_battery: true,
-                battery_profile: profile.to_string(),
+        [source, profile] if source == "battery" => {
+            preferences.battery_profile = profile.clone();
+            send(Request::ProfilePreferencesSet {
+                ac_profile: preferences.ac_profile,
+                battery_profile: preferences.battery_profile,
             })?;
-            println!("on battery, the profile is limited to {profile}");
+            println!("battery profile set to {profile}");
             Ok(())
         }
+        _ => bail!("usage: damx profiles [show] | ac <profile> | battery <profile>"),
     }
 }
 
@@ -515,11 +508,12 @@ fn print_help() {
 Usage:
   damx status [--json]                 Show driver and settings state
   damx profile [name]                  Show or set the power profile
+  damx profiles [show]                 Show AC and battery profile choices
+  damx profiles ac|battery <profile>   Set a profile for that power source
   damx fan auto | <cpu> <gpu>          Show or set fan speeds (0-100)
   damx light <z1> <z2> <z3> <z4> <b>   Set the four keyboard zones and brightness
   damx boot show|save|enable|disable   Manage the preset applied at boot
   damx boot apply                      Apply the saved boot preset now
-  damx policy [show|off|<profile>]     Show or set the battery profile limit
   damx update [--cached]               Check GitHub for driver/GUI updates
   damx version                         Print the version
 

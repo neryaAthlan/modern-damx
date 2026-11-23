@@ -22,7 +22,7 @@ struct Rows {
 
 pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
     let banner = adw::Banner::builder()
-        .title("damxd is not running, so settings are read-only. Start it with `sudo systemctl start damxd`.")
+        .title("damxd is not reachable, so settings are read-only. Start it from Daemon settings or run `sudo systemctl enable --now damxd.service`.")
         .revealed(false)
         .build();
 
@@ -232,10 +232,10 @@ fn render(status: &Status, unit: TemperatureUnit, rows: &Rows) {
         None => "four-zone keyboard not detected".to_string(),
     });
 
-    rows.backlight.set_subtitle(match status.backlight_timeout {
-        Some(true) => "turns off after 30 seconds",
-        Some(false) => "always on",
-        None => "not available",
+    rows.backlight.set_subtitle(&match status.backlight_timeout {
+        Some(0) => "always on".to_string(),
+        Some(seconds) => format!("turns off after {seconds} seconds"),
+        None => "not available".to_string(),
     });
 
     rows.battery.set_subtitle(match status.battery_limiter {

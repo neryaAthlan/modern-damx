@@ -1,18 +1,21 @@
 [Unit]
 Description=DAMX helper daemon (Acer fan, power profile and keyboard lighting)
 Documentation=https://github.com/neryaAthlan/modern-damx
-After=systemd-modules-load.service
-# The boot preset is applied from a short delay inside damxd itself, so it
-# wins over power-profiles-daemon without creating a startup ordering cycle.
+Wants=power-profiles-daemon.service
+After=systemd-modules-load.service power-profiles-daemon.service
+# damxd applies its boot preset only after power-profiles-daemon has selected
+# its startup profile, so the saved profile is not immediately overwritten.
 
 [Service]
 Type=simple
+User=root
+Group=linuwu_sense
 ExecStartPre=-/usr/sbin/modprobe linuwu_sense
 ExecStart=/usr/bin/damxd
 Restart=on-failure
 RestartSec=3
 RuntimeDirectory=damxd
-RuntimeDirectoryMode=0755
+RuntimeDirectoryMode=0750
 
 [Install]
 WantedBy=multi-user.target

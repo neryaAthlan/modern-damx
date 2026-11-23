@@ -17,10 +17,9 @@ light/dark theme.
 | --- | --- |
 | Status | Live driver version, model, kernel, power source, CPU/GPU temperatures, current profile, fan speeds, lighting, battery limiter and backlight timeout |
 | Temperatures | CPU and GPU readings from the Acer embedded controller, with the NVIDIA driver as a fallback; Celsius or Fahrenheit preference |
-| Power profile | All five profiles the driver exposes: `low-power`, `quiet`, `balanced`, `balanced-performance`, `performance` |
-| Battery limit | On battery the profile is capped (default `balanced`); plugging in makes every profile available again |
+| Power profiles | Choose one profile for AC power and another for battery; DAMX switches automatically when the power source changes |
 | Fan speed | Automatic (embedded controller) or manual CPU/GPU percentage, with live RPM readouts on both the status and fan pages |
-| Keyboard | Per-zone colours for the four-zone RGB keyboard, brightness, and the 30-second backlight timeout |
+| Keyboard | Per-zone colours apply immediately for the four-zone RGB keyboard, brightness, and selectable idle timeouts (30s, 40s, 50s, 1m, 2m, or custom); keyboard activity restores the selected lighting |
 | Battery | Battery limiter (charge to 80%) toggle |
 | Boot preset | Stores profile, fan speed and/or lighting and applies them at every boot via `damxd` |
 | Updates | Checks GitHub for new releases of this app and of the driver fork, on demand and once a day |
@@ -112,9 +111,9 @@ damx boot save                   # store the current settings as the boot preset
 damx boot show                   # print the preset
 damx boot enable | disable
 damx boot apply                  # apply it right now
-damx policy                      # show the battery profile limit
-
-damx policy off | balanced       # disable, or cap at another profile
+damx profiles                    # show the AC and battery profiles
+damx profiles ac performance    # choose the plugged-in profile
+damx profiles battery balanced  # choose the battery profile
 damx update                      # check GitHub for driver and app releases
 ```
 
@@ -123,8 +122,16 @@ falls back to writing sysfs directly **only when run as root**.
 
 ## Boot preset
 
-The **Boot preset** page in the GUI lets you choose which of the three settings
-are re-applied at boot:
+The **Boot preset** page lets you choose which of the three settings are
+re-applied at boot. Each switch is saved immediately. Selected fields stay in
+sync when you change the profile, fan speed, or keyboard lighting elsewhere in
+DAMX, so there is no separate save step.
+
+The Daemon page can restore defaults for Performance, Keyboard Lighting, Boot
+Preset, or Daemon settings, or reset all of them together. Resetting all
+restores balanced power profiles, automatic fans, full battery charging, white
+keyboard lighting at full brightness with a 30-second idle timeout, an empty
+boot preset, and daemon autostart enabled.
 
 * power profile
 * fan speed
@@ -170,21 +177,21 @@ temperature_unit = "celsius" # or "fahrenheit"
 
 The CLI honours the same setting (`damx status`).
 
-## Battery profile limit
+## Power source profiles
 
-The policy is enforced by `damxd`, so it is global: the GUI only offers the
-allowed profiles, the CLI refuses a higher one, and unplugging the charger
-immediately switches the profile down. The boot preset obeys it too.
+Choose a profile independently for AC power and battery power in
+**Performance → Power profiles**. `damxd` applies the matching profile when the
+charger is connected or disconnected, and applies the current source's profile
+after startup. Setting the active profile with `damx profile <name>` also
+updates the preference for the current power source.
 
 ```toml
-# /etc/damxd/policy.toml
-limit_on_battery = true
+# /etc/damxd/profiles.toml
+ac_profile = "performance"
 battery_profile = "balanced"
 ```
 
-On battery only profiles up to `battery_profile` are selectable; while the
-charger is connected every profile is available. Change it from
-**Performance → Battery profile limit** or with `damx policy`.
+Both selectors offer every profile supported by the driver.
 
 ## Update checks
 
@@ -232,10 +239,10 @@ install.sh           system-wide installer with GUI/daemon/driver modes
 
 * **GNOME power mode vs. the driver profile.** power-profiles-daemon owns
   `platform_profile` and can rewrite it when the power source changes. The boot
-  preset is applied after it at boot, and `damxd` re-applies the battery cap
-  after unplugging, but changing the GNOME power mode directly may still move
-  the profile. This is a conflict between the driver and PPD, not something the
-  GUI can solve without disabling PPD.
+  preset and the configured AC/battery profile are applied after it at boot.
+  DAMX reapplies the matching profile when the power source changes. Changing
+  GNOME power mode directly may still move the profile until the next source
+  change; this is a conflict between the driver and PPD.
 * **LCD override and battery calibration** are exposed by some driver builds but
   are deliberately left out of the GUI: `lcd_override` is not available on every
   model and battery calibration starts a multi-hour charge/drain cycle.

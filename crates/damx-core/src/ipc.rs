@@ -2,7 +2,7 @@
 //! talk to the privileged `damxd` daemon.
 
 use crate::driver::Status;
-use crate::policy::ProfilePolicy;
+use crate::policy::ProfilePreferences;
 use crate::preset::BootPreset;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -13,6 +13,16 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 pub const DEFAULT_SOCKET: &str = "/run/damxd/damx.sock";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetSection {
+    Performance,
+    KeyboardLighting,
+    BootPreset,
+    Daemon,
+    All,
+}
 
 pub fn socket_path() -> PathBuf {
     env::var_os("DAMX_SOCKET")
@@ -26,9 +36,9 @@ pub enum Request {
     Ping,
     Status,
     BootGet,
-    PolicyGet,
-    PolicySet {
-        limit_on_battery: bool,
+    ProfilePreferencesGet,
+    ProfilePreferencesSet {
+        ac_profile: String,
         battery_profile: String,
     },
     SetProfile {
@@ -43,7 +53,7 @@ pub enum Request {
         brightness: u8,
     },
     SetBacklightTimeout {
-        value: bool,
+        seconds: u16,
     },
     SetBatteryLimiter {
         value: bool,
@@ -52,6 +62,9 @@ pub enum Request {
         preset: BootPreset,
     },
     BootApply,
+    ResetDefaults {
+        section: ResetSection,
+    },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -66,7 +79,7 @@ pub struct Response {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<BootPreset>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy: Option<ProfilePolicy>,
+    pub profile_preferences: Option<ProfilePreferences>,
 }
 
 impl Response {
@@ -93,10 +106,10 @@ impl Response {
         }
     }
 
-    pub fn with_policy(policy: ProfilePolicy) -> Self {
+    pub fn with_profile_preferences(profile_preferences: ProfilePreferences) -> Self {
         Self {
             ok: true,
-            policy: Some(policy),
+            profile_preferences: Some(profile_preferences),
             ..Default::default()
         }
     }

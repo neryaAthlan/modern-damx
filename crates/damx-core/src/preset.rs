@@ -3,7 +3,7 @@
 //! without anyone opening the GUI.
 
 use crate::driver::{Fan, Lighting, Status};
-use crate::policy::{self, ProfilePolicy};
+use crate::policy::ProfilePreferences;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -72,15 +72,11 @@ impl BootPreset {
         };
         let mut errors = Vec::new();
         if let Some(profile) = &self.profile {
-            // On battery the global policy may forbid the saved profile.
-            let choices = driver.profile_choices();
-            let effective = policy::clamp_profile(
-                profile,
-                &choices,
-                crate::driver::on_ac(),
-                &ProfilePolicy::load(),
-            )
-            .unwrap_or_else(|| profile.clone());
+            // Use the configured profile for the current power source.
+            let preferences = ProfilePreferences::load().for_choices(&driver.profile_choices());
+            let effective = preferences
+                .for_source(crate::driver::on_ac())
+                .unwrap_or(profile);
             if let Err(err) = driver.set_profile(&effective) {
                 errors.push(format!("power profile: {err:#}"));
             }
