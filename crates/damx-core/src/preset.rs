@@ -31,10 +31,17 @@ impl BootPreset {
     }
 
     pub fn load() -> Self {
-        fs::read_to_string(Self::path())
-            .ok()
-            .and_then(|text| toml::from_str(&text).ok())
-            .unwrap_or_default()
+        Self::load_checked().unwrap_or_default()
+    }
+
+    pub fn load_checked() -> Result<Self> {
+        let path = Self::path();
+        match fs::read_to_string(&path) {
+            Ok(text) => toml::from_str(&text)
+                .with_context(|| format!("parsing {}", path.display())),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
+        }
     }
 
     pub fn save(&self) -> Result<()> {
@@ -98,5 +105,42 @@ impl BootPreset {
 impl From<&Status> for BootPreset {
     fn from(status: &Status) -> Self {
         Self::from_status(status, true, true, status.lighting.is_some())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn boot_preset_preserves_selected_rgb_zones_and_brightness() {
+        let preset: BootPreset = toml::from_str(
+            r#"
+            enabled = true
+            [lighting]
+            zones = ["ab1020", "10bd30", "1020ef", "abcdef"]
+            brightness = 68
+            "#,
+        )
+        .unwrap();
+        assert!(preset.enabled);
+        assert!(preset.fan.is_none());
+        assert!(preset.profile.is_none());
+        assert_eq!(
+            preset.lighting.as_ref().unwrap().to_sysfs(),
+            "ab1020,10bd30,1020ef,abcdef,68"
+        );
+        let saved = toml::to_string(&preset).unwrap();
+        assert_eq!(toml::from_str::<BootPreset>(&saved).unwrap(), preset);
+    }
+
+    #[test]
+    fn boot_preset_never_creates_lighting_from_missing_or_incomplete_settings() {
+        let omitted: BootPreset = toml::from_str("enabled = true").unwrap();
+        assert!(omitted.lighting.is_none());
+        assert!(toml::from_str::<BootPreset>(
+            "enabled = true\n[lighting]\nzones = ['abcdef']\nbrightness = 68"
+        )
+        .is_err());
     }
 }

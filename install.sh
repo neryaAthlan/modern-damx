@@ -3,6 +3,7 @@
 #
 #   sudo ./install.sh                     GUI + daemon, prebuilt from the latest release
 #   sudo ./install.sh --build             build from source, then install
+#   sudo ./install.sh --use-built         install existing target/release binaries
 #   sudo ./install.sh --daemon-only       daemon + CLI, no GUI
 #   sudo ./install.sh --with-driver       also install the Linuwu Sense driver
 #   sudo ./install.sh --uninstall         remove what this script installed
@@ -28,6 +29,23 @@ DRIVER_DIR="${DAMX_DRIVER_DIR:-}"
 info() { printf '==> %s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
+remove_retired_keyd_binding() {
+    local config=/etc/keyd/modern-damx-nitrosense.conf
+    local marker
+    [ -f "$config" ] && [ ! -L "$config" ] || return 0
+    IFS= read -r marker < "$config" || return 0
+    case "$marker" in
+        '# Managed by Modern DAMX: tilde'|'# Managed by Modern DAMX: grave') ;;
+        *) return 0 ;;
+    esac
+
+    info "Removing the retired Modern DAMX keyd binding"
+    rm -- "$config"
+    if systemctl is-active --quiet keyd.service && ! systemctl restart keyd.service; then
+        printf 'warning: the old binding was removed, but keyd failed to restart\n' >&2
+    fi
+}
+
 usage() {
     cat <<EOF
 Modern DAMX installer
@@ -39,6 +57,7 @@ Options:
                         (default; no Rust toolchain needed)
   --build, --from-source
                         Compile Modern DAMX here, then install that build
+  --use-built           Install binaries already built in target/release
   --daemon-only         Install only damxd and the damx CLI (no GUI)
   --with-driver         Also build and install the Linuwu Sense kernel module
   --driver-dir <path>   Driver checkout to use with --with-driver
@@ -57,6 +76,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --prebuilt) SOURCE="prebuilt" ;;
         --build|--from-source) SOURCE="build" ;;
+        --use-built) SOURCE="built" ;;
         --daemon-only|--daemon) MODE="daemon" ;;
         --with-driver) WITH_DRIVER=1 ;;
         --driver-dir)
@@ -78,8 +98,10 @@ fi
 if [ "$UNINSTALL" -eq 1 ]; then
     info "Stopping damxd"
     systemctl disable --now damxd.service 2>/dev/null || true
+    remove_retired_keyd_binding
     rm -f "${BINDIR}/damx" "${BINDIR}/damxd" "${BINDIR}/damx-gui"
     rm -f "${UNITDIR}/damxd.service" \
+          "${UNITDIR}/damx-power-profile.service" \
           "${USERUNITDIR}/damx-update-check.service" \
           "${USERUNITDIR}/damx-update-check.timer" \
           "${APPDIR}/io.github.neryaathlan.Damx.desktop" \
@@ -135,6 +157,10 @@ else
             BIN_SRC="${DOWNLOAD_DIR}/modern-damx-${TAG}-${ARCH}-linux"
             DATA_DIR="${BIN_SRC}/data"
             ;;
+        built)
+            BIN_SRC="${SCRIPT_DIR}/target/release"
+            DATA_DIR="${SCRIPT_DIR}/data"
+            ;;
         build)
             command -v cargo >/dev/null || die "cargo is required (install rustc and cargo)"
             if [ "$MODE" = "full" ]; then
@@ -163,7 +189,7 @@ fi
 if [ "$MODE" = "full" ]; then
     [ -x "${BIN_SRC}/damx-gui" ] || die "this package has no GUI binary; use --daemon-only"
 fi
-[ -f "${DATA_DIR}/damxd.service" ] || die "the package is missing its systemd units"
+[ -f "${DATA_DIR}/damxd.service" ] && [ -f "${DATA_DIR}/damx-power-profile.service" ] || die "the package is missing its systemd units"
 
 info "Installing binaries to ${BINDIR}"
 install -d "${BINDIR}"
@@ -181,6 +207,7 @@ fi
 info "Installing systemd units"
 install -d "${UNITDIR}" "${USERUNITDIR}"
 install -m 0644 "${DATA_DIR}/damxd.service" "${UNITDIR}/damxd.service"
+install -m 0644 "${DATA_DIR}/damx-power-profile.service" "${UNITDIR}/damx-power-profile.service"
 install -m 0644 "${DATA_DIR}/damx-update-check.service" "${USERUNITDIR}/damx-update-check.service"
 install -m 0644 "${DATA_DIR}/damx-update-check.timer" "${USERUNITDIR}/damx-update-check.timer"
 
@@ -214,9 +241,9 @@ fi
 
 systemctl daemon-reload
 info "Starting damxd"
-systemctl enable --now damxd.service
-# restart, not just start: an already running daemon must pick up the new binary
+systemctl enable damxd.service
 systemctl restart damxd.service
+remove_retired_keyd_binding
 
 TARGET_USER="${SUDO_USER:-${USER:-}}"
 if [ -n "${TARGET_USER}" ] && [ "${TARGET_USER}" != "root" ]; then

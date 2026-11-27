@@ -1,17 +1,22 @@
-<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#1c2733"/>
-      <stop offset="1" stop-color="#0a0f14"/>
+    <linearGradient id="shell" x1="16" y1="8" x2="114" y2="121" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#34404f"/>
+      <stop offset=".53" stop-color="#202833"/>
+      <stop offset="1" stop-color="#11161e"/>
     </linearGradient>
-    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#4fc3f7"/>
-      <stop offset="0.5" stop-color="#7c4dff"/>
-      <stop offset="1" stop-color="#ff4081"/>
+    <linearGradient id="alloy" x1="37" y1="35" x2="90" y2="94" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff"/>
+      <stop offset="1" stop-color="#b6c5d3"/>
+    </linearGradient>
+    <linearGradient id="signal" x1="78" y1="89" x2="99" y2="59" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#18bca1"/>
+      <stop offset="1" stop-color="#88ffe1"/>
     </linearGradient>
   </defs>
-  <rect x="6" y="6" width="116" height="116" rx="26" fill="url(#bg)"/>
-  <path d="M37 34h24c19 0 31 12 31 30s-12 30-31 30H37zm15 13v34h9c11 0 17-6 17-17s-6-17-17-17z" fill="#f2f6fa"/>
-  <rect x="30" y="100" width="68" height="6" rx="3" fill="url(#accent)"/>
+  <path fill="#0d1118" d="M28 10h72l18 18v73l-17 18H27l-17-18V28z"/>
+  <path fill="url(#shell)" stroke="#697889" stroke-width="2" d="M29 10h70l17 17v71l-17 17H29L12 98V27z"/>
+  <path fill="#151c25" d="M32 19h64l11 11v65l-11 11H32L21 95V30z"/>
+  <path fill="url(#alloy)" d="M35 35h39l19 18-11 11-15-15H49v30h14L49 93H35z"/>
+  <path fill="url(#signal)" d="M96 57v14L74 93H56z"/>
 </svg>

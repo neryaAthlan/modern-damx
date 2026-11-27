@@ -2,6 +2,12 @@ use adw::prelude::*;
 
 pub fn build() -> gtk::Widget {
     let page = adw::PreferencesPage::new();
+    let brand = adw::PreferencesGroup::new();
+    let logo = gtk::Image::from_icon_name(crate::APP_ID);
+    logo.set_pixel_size(80);
+    logo.set_halign(gtk::Align::Center);
+    brand.add(&logo);
+    page.add(&brand);
 
     let author = adw::PreferencesGroup::builder()
         .title("Modern DAMX")

@@ -11,6 +11,8 @@ use damx_core::policy::ProfilePreferences;
 use damx_core::preset::BootPreset;
 use damx_core::update;
 use std::process::ExitCode;
+use std::thread;
+use std::time::{Duration, Instant};
 
 fn main() -> ExitCode {
     // Behave like a normal Unix tool when piped into `head`/`less`.
@@ -41,6 +43,8 @@ fn run() -> Result<()> {
         "fan" => cmd_fan(rest),
         "light" => cmd_light(rest),
         "boot" => cmd_boot(rest),
+        "startup-apply" => cmd_startup_apply(),
+        "startup-profile" => cmd_startup_profile(),
         "update" => cmd_update(rest),
         "help" | "-h" | "--help" => {
             print_help();
@@ -125,8 +129,15 @@ fn direct(request: Request) -> Result<Response> {
             Response::with_status(driver()?.status())
         }
         Request::SetLighting { zones, brightness } => {
-            driver()?.set_lighting(&Lighting { zones, brightness })?;
-            Response::with_status(driver()?.status())
+            let driver = driver()?;
+            let lighting = Lighting { zones, brightness };
+            driver.set_lighting(&lighting)?;
+            let mut preset = BootPreset::load_checked()?;
+            if preset.lighting.is_some() {
+                preset.lighting = Some(lighting);
+                preset.save()?;
+            }
+            Response::with_status(driver.status())
         }
         Request::SetBacklightTimeout { seconds } => {
             driver()?.set_backlight_timeout(seconds)?;
@@ -155,6 +166,110 @@ fn direct(request: Request) -> Result<Response> {
             bail!("reset defaults requires the damxd service")
         }
     })
+}
+
+/// Runs before the daemon opens its socket. RGB readiness is independent of
+/// the Acer WMI fan and profile attributes.
+fn cmd_startup_apply() -> Result<()> {
+    if !is_root() {
+        bail!("startup-apply requires root");
+    }
+    let preset = BootPreset::load_checked()?;
+    let mut lighting = preset.lighting.as_ref().filter(|_| preset.enabled);
+    let mut fan = preset.fan.filter(|_| preset.enabled);
+    let mut profile_pending = true;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut last_lighting_error = None;
+    let mut last_fan_error = None;
+    let mut last_profile_error = None;
+
+    loop {
+        if let Some(saved) = lighting {
+            match Driver::restore_lighting(saved) {
+                Ok(backend) => {
+                    println!("damx: restored boot keyboard lighting via {backend}");
+                    lighting = None;
+                    last_lighting_error = None;
+                }
+                Err(err) => last_lighting_error = Some(err),
+            }
+        }
+
+        if profile_pending {
+            match apply_startup_profile(&preset) {
+                Ok(()) => {
+                    profile_pending = false;
+                    last_profile_error = None;
+                }
+                Err(err) => last_profile_error = Some(err),
+            }
+        }
+
+        if let Some(saved) = fan {
+            match Driver::discover()
+                .context("Linuwu Sense fan controls are unavailable")
+                .and_then(|driver| driver.set_fan(saved.cpu, saved.gpu))
+            {
+                Ok(()) => {
+                    fan = None;
+                    last_fan_error = None;
+                }
+                Err(err) => last_fan_error = Some(err),
+            }
+        }
+
+        if (lighting.is_none() && fan.is_none() && !profile_pending)
+            || Instant::now() >= deadline
+        {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    for (setting, error) in [
+        ("keyboard lighting", last_lighting_error),
+        ("power profile", last_profile_error),
+        ("fan speed", last_fan_error),
+    ] {
+        if let Some(error) = error {
+            eprintln!("damx: skipped startup {setting}: {error:#}");
+        }
+    }
+    Ok(())
+}
+
+/// Reapply the source profile after an optional power-profiles-daemon starts.
+fn cmd_startup_profile() -> Result<()> {
+    if !is_root() {
+        bail!("startup-profile requires root");
+    }
+    apply_startup_profile(&BootPreset::load_checked()?)
+}
+
+fn apply_startup_profile(preset: &BootPreset) -> Result<()> {
+    let Some(driver) = Driver::discover() else {
+        // This is also used on machines without Linuwu Sense.
+        if preset.enabled && preset.profile.is_some() {
+            bail!("Linuwu Sense profile controls are unavailable");
+        }
+        return Ok(());
+    };
+    let choices = driver.profile_choices();
+    if choices.is_empty() {
+        if preset.enabled && preset.profile.is_some() {
+            bail!("no Acer platform profiles are available");
+        }
+        return Ok(());
+    }
+    let preferences = ProfilePreferences::load().for_choices(&choices);
+    let fallback = preset.profile.as_deref().filter(|_| preset.enabled);
+    if let Some(profile) = preferences.for_source(damx_core::driver::on_ac()).or(fallback) {
+        if driver.profile().as_deref() != Some(profile) {
+            driver.set_profile(profile)?;
+        }
+        println!("damx: startup power profile is {profile}");
+    }
+    Ok(())
 }
 
 fn read_status() -> Status {

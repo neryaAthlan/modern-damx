@@ -1,252 +1,162 @@
+<div align="center">
+
+<img src="data/io.github.neryaathlan.Damx.svg" width="128" height="128" alt="Modern DAMX logo">
+
 # Modern DAMX
 
-A small, native manager for Acer Nitro/Predator laptops on Linux, written in
-Rust for Debian and recent GNOME desktops. It is a modern rewrite of the parts of
-[Div Acer Manager Max](https://github.com/PXDiv/Div-Acer-Manager-Max) that the
-[Linuwu Sense](https://github.com/neryaAthlan/Div-Linuwu-Sense) driver actually
-supports, with one addition the original does not have: a **boot preset** that
-re-applies your power profile, fan speed and keyboard lighting at startup,
-without opening any window.
+**Acer Nitro and Predator controls for Linux.**
 
-The GUI is GTK 4 + libadwaita, so it follows the GNOME look and the system
-light/dark theme.
+Tune your cooling, choose separate power profiles for AC and battery, and bring
+back your keyboard lighting before you sign in.
 
-## Features
+[Download a release](https://github.com/neryaAthlan/modern-damx/releases) · [Install from source](#build-from-source) · [Boot preset](#boot-preset) · [Command line](#command-line)
 
-| Area | What it does |
+</div>
+
+Modern DAMX is a native Rust rewrite of Div Acer Manager Max for Debian and
+recent GNOME desktops. The GTK 4 and libadwaita interface follows your system
+theme. Use the desktop app for everyday controls or the `damx` CLI for scripts
+and headless machines. [Original Div Acer Manager Max](https://github.com/PXDiv/Div-Acer-Manager-Max)
+
+## Controls
+
+| | |
 | --- | --- |
-| Status | Live driver version, model, kernel, power source, CPU/GPU temperatures, current profile, fan speeds, lighting, battery limiter and backlight timeout |
-| Temperatures | CPU and GPU readings from the Acer embedded controller, with the NVIDIA driver as a fallback; Celsius or Fahrenheit preference |
-| Power profiles | Choose one profile for AC power and another for battery; DAMX switches automatically when the power source changes |
-| Fan speed | Automatic (embedded controller) or manual CPU/GPU percentage, with live RPM readouts on both the status and fan pages |
-| Keyboard | Per-zone colours apply immediately for the four-zone RGB keyboard, brightness, and selectable idle timeouts (30s, 40s, 50s, 1m, 2m, or custom); keyboard activity restores the selected lighting |
-| Battery | Battery limiter (charge to 80%) toggle |
-| Boot preset | Stores profile, fan speed and/or lighting and applies them at every boot via `damxd` |
-| Updates | Checks GitHub for new releases of this app and of the driver fork, on demand and once a day |
-| Credits | Author and upstream projects, linked from inside the app |
-
-Everything is also available from the command line (`damx`).
-
-## Requirements
-
-* Debian 13 (trixie) or another distribution with GTK 4.16+ and libadwaita 1.6+
-* Rust 1.85 or newer to build
-* The `linuwu_sense` kernel module from
-  [neryaAthlan/Div-Linuwu-Sense](https://github.com/neryaAthlan/Div-Linuwu-Sense),
-  loaded and bound to the Acer WMI device
-* Membership of the `linuwu_sense` group (created by the driver installer)
-
-The GUI never asks for a password: privileged writes go through `damxd`, a
-small root daemon with a group-restricted Unix socket. This is needed because
-the driver's sysfs attributes are owned by root and sysfs permissions cannot be
-changed after boot.
+| **Cooling** | Let the embedded controller manage the fans or set CPU and GPU fan speeds separately. Read temperatures and RPM live. |
+| **Power** | Choose a profile for AC and another for battery. Modern DAMX switches between them as you plug in or unplug. |
+| **Keyboard** | Set four RGB zones, brightness, and the idle timeout on supported keyboards. Keyboard activity restores lighting after an idle timeout. |
+| **Battery** | Toggle the firmware's 80% charge limit on supported models. |
+| **Boot preset** | Restore your selected lighting, fan speeds, and power profile before the login screen, with the app closed. |
 
 ## Install
 
-### Easy install — prebuilt binaries
+Modern DAMX targets Debian 13. Other distributions need GTK 4.16+ and
+libadwaita 1.6+ for the GUI. Hardware controls require the `linuwu_sense`
+module and vary by Acer model. The driver fork documents tested hardware and
+kernel requirements. [Div-Linuwu-Sense](https://github.com/neryaAthlan/Div-Linuwu-Sense)
 
-```bash
-git clone https://github.com/neryaAthlan/modern-damx
-cd modern-damx
+### Install a release
+
+Download the Linux archive from the [releases page](https://github.com/neryaAthlan/modern-damx/releases),
+verify it against `SHA256SUMS`, and extract it. Run this inside the extracted
+directory to install its bundled binaries. If the original DAMX daemon is
+installed, disable it before installing Modern DAMX:
+
+```sh
+sudo systemctl disable --now damx-daemon.service
+```
+
+Install from the extracted directory:
+
+```sh
 sudo ./install.sh
 ```
 
-The installer looks up the newest GitHub release, downloads the package for
-your CPU architecture (currently `x86_64`), checks it against `SHA256SUMS` and
-installs the binaries. All it needs is `curl`; no Rust toolchain or development
-packages, because GTK 4 and libadwaita are already part of a GNOME desktop.
+The installer starts `damxd.service` and adds your user to the
+`linuwu_sense` group. Log out and back in if your group membership changed,
+then open **Modern DAMX** from the application menu.
 
-Every `v*` tag is built by GitHub Actions on Debian 13, so the release page also
-carries the three standalone binaries and the tarball for offline installs
-(running `install.sh` inside the extracted tarball uses its bundled binaries).
+### Build from source
 
-### Expert install — build from source
+Use Rust 1.85 or newer. On Debian 13:
 
-```bash
+```sh
 sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev curl
-git clone https://github.com/neryaAthlan/modern-damx
+git clone https://github.com/neryaAthlan/modern-damx.git
 cd modern-damx
-sudo ./install.sh --build
+cargo build --release --locked --workspace
+sudo ./install.sh --use-built
 ```
 
-`--build` compiles the workspace with the local toolchain and installs that
-build; the plain `./install.sh` never compiles anything.
+Use the source build to try changes from `main` before they appear in a
+release.
 
 ### Installer options
 
-```bash
-sudo ./install.sh                        # prebuilt GUI, CLI and daemon (default)
-sudo ./install.sh --build                # compile here, then install (expert)
-sudo ./install.sh --prebuilt             # force the prebuilt download (default)
-sudo ./install.sh --daemon-only          # daemon + CLI only, no GUI
-sudo ./install.sh --with-driver          # also install the Linuwu Sense module
-sudo ./install.sh --with-driver --driver-dir /path/to/Div-Linuwu-Sense
-sudo ./install.sh --uninstall            # remove Modern DAMX (keeps the preset)
+| Option | Behavior |
+| --- | --- |
+| `--use-built` | Install the binaries from `target/release`. |
+| `--build` | Build from source and install in one step. |
+| `--daemon-only` | Install the daemon and CLI for headless use. |
+| `--with-driver` | Build and install Linuwu Sense from a local driver checkout. Use `--driver-dir /path/to/Div-Linuwu-Sense` to select it explicitly. |
+| `--uninstall` | Remove Modern DAMX and keep the driver and boot preset. |
+
+The existing kernel module is only replaced when you pass `--with-driver`.
+If Secure Boot is enabled, the module needs a signature trusted by your system.
+
+## Boot preset
+
+Open **Boot preset** and enable the settings you want restored. When you change
+a selected setting elsewhere in Modern DAMX, the preset updates with it. To
+restore keyboard lighting alone, enable **Keyboard lighting** and leave the
+other fields off.
+
+Systemd runs the restore before starting `damxd` and before the display manager.
+Modern DAMX uses direct HID for ENEK5130 keyboards and Linuwu Sense sysfs for
+other supported four-zone keyboards. It tries the saved settings immediately
+and gives unavailable hardware a short retry window. A missed setting is logged
+and startup continues. The RGB boot restore was verified on an Acer Nitro V 16S
+(ANV16S-71).
+
+The preset lives at `/etc/damxd/boot.toml`. Omitted fields are skipped by
+the preset. Your AC and battery profile preferences still apply separately.
+
+```toml
+enabled = true
+
+[lighting]
+zones = ["ffffff", "ffffff", "ffffff", "ffffff"]
+brightness = 80
 ```
 
-`--with-driver` runs `linuwu-sense.sh install` from your driver checkout, so the
-kernel module is rebuilt for the running kernel and registered with DKMS.
-Without it, the existing module is left alone.
+To check what happened on the current boot:
 
-The default install adds the binaries to `/usr/bin`, installs and starts
-`damxd.service`, adds the desktop entry and icon, and enables a daily user timer
-for the update check.
-
-You can also run the GUI from a checkout without installing it, but changing
-settings then requires `damxd` to be installed and running:
-
-```bash
-cargo run --release -p damx-gui
+```sh
+damx boot show
+journalctl -b -u damxd.service
 ```
 
 ## Command line
 
-```bash
-damx status                      # human readable state (--json for scripts)
-damx profile performance         # low-power | quiet | balanced | balanced-performance | performance
-damx fan auto                    # hand the fans back to the EC
-damx fan 45 45                   # CPU 45%, GPU 45%
-damx light ff0000 00ff00 0000ff ffffff 80   # four zones + brightness
-damx boot save                   # store the current settings as the boot preset
-damx boot show                   # print the preset
-damx boot enable | disable
-damx boot apply                  # apply it right now
-damx profiles                    # show the AC and battery profiles
-damx profiles ac performance    # choose the plugged-in profile
-damx profiles battery balanced  # choose the battery profile
-damx update                      # check GitHub for driver and app releases
+```sh
+damx status
+damx status --json
+damx profiles ac performance
+damx profiles battery balanced
+damx fan auto
+damx fan 45 45
+damx light ff0000 00ff00 0000ff ffffff 80
+damx boot save
+damx boot apply
+damx update
 ```
 
-Commands that write go through `damxd`. If the daemon is not running, `damx`
-falls back to writing sysfs directly **only when run as root**.
+The CLI and GUI send privileged writes to `damxd` over a group-restricted Unix
+socket. The GUI can read status when the daemon is stopped. Root can also use
+the CLI to write directly when the daemon is unavailable.
 
-## Boot preset
+## Settings and compatibility
 
-The **Boot preset** page lets you choose which of the three settings are
-re-applied at boot. Each switch is saved immediately. Selected fields stay in
-sync when you change the profile, fan speed, or keyboard lighting elsewhere in
-DAMX, so there is no separate save step.
+| Setting | Details |
+| --- | --- |
+| **Temperatures** | Readings come from the Acer embedded controller, with `nvidia-smi` as a GPU fallback. Choose Celsius or Fahrenheit under **Status → Preferences**. The CLI uses the same preference. |
+| **Power profiles** | AC and battery choices live in `/etc/damxd/profiles.toml`. GNOME can also change the active profile. Modern DAMX reapplies its preference after `power-profiles-daemon` starts and when the power source changes. |
+| **Updates** | The **Updates** page checks published app and driver releases or tags. The user timer checks daily when enabled. Repository choices live in `~/.config/damx/config.toml`. |
+| **Model support** | Fan, battery and RGB controls depend on the laptop and loaded driver. Battery calibration and LCD override are outside the Modern DAMX GUI. |
 
-The Daemon page can restore defaults for Performance, Keyboard Lighting, Boot
-Preset, or Daemon settings, or reset all of them together. Resetting all
-restores balanced power profiles, automatic fans, full battery charging, white
-keyboard lighting at full brightness with a 30-second idle timeout, an empty
-boot preset, and daemon autostart enabled.
+## Project layout
 
-* power profile
-* fan speed
-* keyboard lighting
-
-`damxd` waits for the kernel module (up to 60 seconds after boot), then applies
-the preset as root, before anyone logs in. This means the laptop comes up the
-way you left it and you never need to open the GUI for that.
-
-The preset is stored in `/etc/damxd/boot.toml`:
-
-```toml
-enabled = true
-profile = "balanced"
-
-[fan]
-cpu = 35
-gpu = 35
-
-[lighting]
-zones = ["ff0000", "00ff00", "0000ff", "ffffff"]
-brightness = 80
-```
-
-Every field is optional; omit a key (or turn its switch off in the GUI) to leave
-that setting untouched at boot. The daemon unit is ordered after
-`power-profiles-daemon.service` so the preset is applied after GNOME has chosen
-its own power mode.
-
-## Temperatures and units
-
-The **Status** and **Performance** pages show CPU and GPU temperatures. They
-come from the driver's own hwmon sensors (the Acer embedded controller), and the
-GPU value falls back to `nvidia-smi` when the dGPU sensor is asleep.
-
-The unit is chosen under **Status → Preferences** and stored in
-`~/.config/damx/config.toml`:
-
-```toml
-[ui]
-temperature_unit = "celsius" # or "fahrenheit"
-```
-
-The CLI honours the same setting (`damx status`).
-
-## Power source profiles
-
-Choose a profile independently for AC power and battery power in
-**Performance → Power profiles**. `damxd` applies the matching profile when the
-charger is connected or disconnected, and applies the current source's profile
-after startup. Setting the active profile with `damx profile <name>` also
-updates the preference for the current power source.
-
-```toml
-# /etc/damxd/profiles.toml
-ac_profile = "performance"
-battery_profile = "balanced"
-```
-
-Both selectors offer every profile supported by the driver.
-
-## Update checks
-
-The app checks the latest published release or tag of two repositories:
-
-```toml
-# ~/.config/damx/config.toml
-[updates]
-driver_repo = "neryaAthlan/Div-Linuwu-Sense"
-gui_repo = "neryaAthlan/modern-damx"
-```
-
-The defaults point at this project. Change them if you publish under other
-names. Checks use the GitHub API through `curl`, run once a day from
-`damx-update-check.timer` (per user), and whenever the **Updates** page is
-opened. Results are cached in `~/.cache/damx/update.json` so the page opens
-instantly.
-
-If a repository has no releases or tags yet, the page says so instead of
-guessing from branch commits — publish a tag (`v0.1.0`) to make updates visible.
+| Component | Role |
+| --- | --- |
+| `crates/damx-gui` | GTK 4 and libadwaita desktop app |
+| `crates/damx-cli` | Command line tool and system boot restore |
+| `crates/damx-daemon` | Privileged helper and power source monitoring |
+| `crates/damx-core` | Hardware access, configuration, IPC and update checks |
+| `data/` | Systemd units, desktop entry and icon |
 
 ## Credits
 
-* **Nerya Athlan** ([neryaAthlan](https://github.com/neryaAthlan)) — author and
-  maintainer of this rewrite and of the Div-Linuwu-Sense fork.
-* **PXDiv** — [Div Acer Manager Max](https://github.com/PXDiv/Div-Acer-Manager-Max),
-  the original GUI this rewrite is based on.
-* **0x7375646F** — [Linuwu Sense](https://github.com/0x7375646F/Linuwu-Sense),
-  the kernel driver that exposes fan, power and keyboard controls.
+Modern DAMX and the driver fork are maintained by Nerya Athlan. The project
+builds on the work of PXDiv and 0x7375646F. [Nerya Athlan](https://github.com/neryaAthlan) · [Div Acer Manager Max](https://github.com/PXDiv/Div-Acer-Manager-Max) · [Linuwu Sense](https://github.com/0x7375646F/Linuwu-Sense)
 
-The same list is shown on the **Credits** tab of the app.
-
-## Layout
-
-```
-crates/damx-core     sysfs driver access, boot preset, IPC protocol, update check
-crates/damx-daemon   damxd: root helper, applies the boot preset, owns the socket
-crates/damx-cli      damx: command line interface
-crates/damx-gui      damx-gui: GTK 4 / libadwaita application
-data/                systemd units, desktop entry, icon
-install.sh           system-wide installer with GUI/daemon/driver modes
-```
-
-## Notes and limitations
-
-* **GNOME power mode vs. the driver profile.** power-profiles-daemon owns
-  `platform_profile` and can rewrite it when the power source changes. The boot
-  preset and the configured AC/battery profile are applied after it at boot.
-  DAMX reapplies the matching profile when the power source changes. Changing
-  GNOME power mode directly may still move the profile until the next source
-  change; this is a conflict between the driver and PPD.
-* **LCD override and battery calibration** are exposed by some driver builds but
-  are deliberately left out of the GUI: `lcd_override` is not available on every
-  model and battery calibration starts a multi-hour charge/drain cycle.
-* **Secure Boot.** DKMS modules need to be signed (or Secure Boot disabled) for
-  the driver to load. Modern DAMX only talks to an already-loaded driver.
-* The GUI tests for a running daemon; without it, it shows a banner and works
-  read-only.
+[License](LICENSE)

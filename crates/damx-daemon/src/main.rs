@@ -4,8 +4,7 @@
 //! be changed at runtime, so the GUI and the CLI send their writes here over a
 //! Unix socket that only members of the `linuwu_sense` group can open.
 //!
-//! The daemon also applies the boot preset after startup, and it is ordered
-//! after power-profiles-daemon so the preset wins over GNOME's default.
+//! The systemd service runs the boot preset before starting the daemon.
 
 use anyhow::{Context, Result};
 use damx_core::driver::{self, Driver, Lighting, Status};
@@ -78,7 +77,6 @@ fn main() -> Result<()> {
         socket.display()
     );
 
-    apply_boot_preset_later();
     watch_power_source();
     watch_keyboard_activity();
 
@@ -548,44 +546,6 @@ fn keyboard_event_paths() -> Vec<PathBuf> {
             })
         })
         .collect()
-}
-
-/// The module may load after us at boot, so retry for a while before applying.
-fn apply_boot_preset_later() {
-    thread::spawn(|| {
-        // Wait for power-profiles-daemon to choose its initial mode first.
-        thread::sleep(Duration::from_secs(5));
-        let preset = BootPreset::load();
-        let mut last_errors = None;
-        for attempt in 1..=60 {
-            if Driver::discover().is_some() {
-                let mut errors = if preset.enabled && !preset.is_empty() {
-                    preset.apply()
-                } else {
-                    Vec::new()
-                };
-                if let Err(err) = apply_source_profile() {
-                    errors.push(format!("power profile: {err:#}"));
-                }
-                if errors.is_empty() {
-                    println!("damxd: startup settings applied on attempt {attempt}");
-                    return;
-                }
-                last_errors = Some(errors);
-            }
-            if attempt < 60 {
-                thread::sleep(Duration::from_secs(1));
-            }
-        }
-        if let Some(errors) = last_errors {
-            eprintln!(
-                "damxd: boot preset failed after 60 attempts: {}",
-                errors.join("; ")
-            );
-        } else {
-            eprintln!("damxd: driver did not appear within 60s; boot preset skipped");
-        }
-    });
 }
 
 /// UID of the process on the other end of the socket (SO_PEERCRED).

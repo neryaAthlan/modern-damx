@@ -1,0 +1,13 @@
+[Unit]
+Description=Reapply the DAMX power profile after power-profiles-daemon
+After=power-profiles-daemon.service damxd.service
+Requisite=power-profiles-daemon.service
+
+[Service]
+Type=oneshot
+ExecCondition=/usr/bin/systemctl --quiet is-active damxd.service
+ExecStart=-/usr/bin/damx startup-profile
+TimeoutStartSec=5s
+
+[Install]
+WantedBy=power-profiles-daemon.service

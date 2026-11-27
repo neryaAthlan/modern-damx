@@ -252,6 +252,25 @@ impl Driver {
             return Ok(());
         }
 
+        self.set_wmi_lighting(lighting)
+    }
+
+    /// Boot can reach the WMI attributes before the RGB controller has a
+    /// hidraw node. On ENEK5130 hardware, a successful WMI write does not
+    /// establish that the LEDs changed, so wait for the matching HID device.
+    pub fn restore_lighting(lighting: &Lighting) -> Result<&'static str> {
+        if !enek5130_hid_devices().is_empty() || enek5130_acpi_present() {
+            set_enek5130_lighting(lighting)?;
+            save_hid_lighting(lighting)?;
+            return Ok("ENEK5130 HID");
+        }
+        Self::discover()
+            .context("Linuwu Sense keyboard controls are unavailable")?
+            .set_wmi_lighting(lighting)?;
+        Ok("Linuwu Sense WMI")
+    }
+
+    fn set_wmi_lighting(&self, lighting: &Lighting) -> Result<()> {
         let path = self
             .kb_attr("per_zone_mode")
             .ok_or_else(|| anyhow!("this laptop does not expose a four-zone keyboard"))?;
@@ -491,6 +510,14 @@ fn sense_candidates() -> Vec<PathBuf> {
     }
 
     out
+}
+
+fn enek5130_acpi_present() -> bool {
+    fs::read_dir("/sys/bus/acpi/devices").is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry.file_name().to_string_lossy().starts_with("ENE51301:")
+        })
+    })
 }
 
 /// Find Acer's ENEK5130 keyboard controller by its stable HID identity.
